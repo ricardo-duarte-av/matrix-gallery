@@ -1,0 +1,18 @@
+# Matrix Room Media Gallery — sample configuration
+# Copy this file to config.yaml and fill in your values before running.
+
+# Matrix homeserver URL (no trailing slash)
+homeserver: "https://matrix.example.com"
+
+# Access token from your Matrix client (Settings → Help & About → Access Token)
+access_token: "syt_your_access_token_here"
+
+# Room ID to generate the gallery from (e.g. !abc123:matrix.example.com)
+room_id: "!roomid:matrix.example.com"
+
+# HTTP listen address and port
+listen_address: "0.0.0.0"
+listen_port: 8008
+
+# Directory used to cache generated thumbnails
+cache_dir: "./cache"

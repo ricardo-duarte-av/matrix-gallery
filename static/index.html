@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matrix Room Gallery</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0d0d;
+    --surface: #1a1a1a;
+    --accent: #7c3aed;
+    --text: #e5e5e5;
+    --muted: #6b7280;
+    --gap: 3px;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+
+  /* ── Header ── */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(13,13,13,.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid #222;
+  }
+  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .02em; }
+  #status {
+    margin-left: auto;
+    font-size: .8rem;
+    color: var(--muted);
+    min-width: 5ch;
+    text-align: right;
+  }
+
+  /* ── Gallery grid ── */
+  #gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(clamp(120px, 20vw, 260px), 1fr));
+    gap: var(--gap);
+    padding: var(--gap);
+  }
+
+  .media-card {
+    position: relative;
+    overflow: hidden;
+    background: var(--surface);
+    cursor: pointer;
+    aspect-ratio: 1;
+    border-radius: 2px;
+  }
+
+  .media-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform .25s ease, opacity .3s;
+    opacity: 0;
+  }
+  .media-card img.loaded { opacity: 1; }
+  .media-card:hover img { transform: scale(1.06); }
+
+  /* Video badge */
+  .video-badge {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    background: rgba(0,0,0,.65);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: .7rem;
+    color: #fff;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+  }
+
+  /* Placeholder for items with no thumbnail */
+  .media-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: .8rem;
+  }
+  .media-placeholder svg { width: 40px; height: 40px; }
+
+  /* ── Infinite scroll sentinel & loader ── */
+  #sentinel { height: 1px; }
+
+  #loader {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--muted);
+    font-size: .9rem;
+    display: none;
+  }
+  #loader.visible { display: block; }
+
+  .spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--muted);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Lightbox ── */
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0,0,0,.92);
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #lightbox.open { display: flex; }
+
+  #lb-media-wrap {
+    position: relative;
+    max-width: 92vw;
+    max-height: 85vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #lb-media-wrap img,
+  #lb-media-wrap video {
+    max-width: 92vw;
+    max-height: 85vh;
+    object-fit: contain;
+    border-radius: 4px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.7);
+  }
+
+  #lb-meta {
+    margin-top: 10px;
+    font-size: .8rem;
+    color: var(--muted);
+    max-width: 92vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  #lb-close {
+    position: fixed;
+    top: 14px;
+    right: 18px;
+    font-size: 1.8rem;
+    line-height: 1;
+    color: #fff;
+    cursor: pointer;
+    opacity: .7;
+    background: none;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: opacity .15s;
+  }
+  #lb-close:hover { opacity: 1; background: rgba(255,255,255,.1); }
+
+  #lb-prev, #lb-next {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,.08);
+    border: none;
+    color: #fff;
+    font-size: 1.6rem;
+    padding: 14px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background .15s;
+    line-height: 1;
+  }
+  #lb-prev { left: 10px; }
+  #lb-next { right: 10px; }
+  #lb-prev:hover, #lb-next:hover { background: rgba(255,255,255,.18); }
+  #lb-prev:disabled, #lb-next:disabled { opacity: .2; cursor: default; }
+
+  /* ── Empty state ── */
+  #empty {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 60vh;
+    color: var(--muted);
+    gap: 12px;
+  }
+  #empty.visible { display: flex; }
+  #empty svg { width: 64px; height: 64px; opacity: .4; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+    <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+  </svg>
+  <h1>Room Gallery</h1>
+  <span id="status"></span>
+</header>
+
+<div id="empty">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+  </svg>
+  <span>No media found in this room.</span>
+</div>
+
+<main id="gallery" role="list" aria-label="Media gallery"></main>
+
+<div id="sentinel"></div>
+<div id="loader"><span class="spinner"></span>Loading…</div>
+
+<!-- Lightbox -->
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
+  <button id="lb-close" aria-label="Close">×</button>
+  <button id="lb-prev" aria-label="Previous">‹</button>
+  <div id="lb-media-wrap">
+    <div id="lb-content"></div>
+  </div>
+  <div id="lb-meta"></div>
+  <button id="lb-next" aria-label="Next">›</button>
+</div>
+
+<script>
+(() => {
+  // ── State ──────────────────────────────────────────────────────────────────
+  let offset = 0;
+  let fetching = false;
+  let exhausted = false;
+  let items = [];         // all loaded MediaItem objects
+  let lbIndex = -1;       // currently open lightbox index into `items`
+
+  // ── Grid geometry (must mirror the CSS) ───────────────────────────────────
+  // CSS: grid-template-columns: repeat(auto-fill, minmax(clamp(120px, 20vw, 260px), 1fr))
+  // CSS: gap: 3px
+  const GAP = 3;
+  function getGridCols() {
+    const vw = window.innerWidth;
+    const minW = Math.min(260, Math.max(120, vw * 0.2));
+    return Math.max(1, Math.floor((vw + GAP) / (minW + GAP)));
+  }
+  function getCellWidth() {
+    const cols = getGridCols();
+    return (window.innerWidth - GAP * (cols - 1)) / cols;
+  }
+  // Items needed to fill the viewport plus `extraRows` additional rows.
+  function calcBatch(extraRows) {
+    const cols = getGridCols();
+    const rowsFit = Math.ceil(window.innerHeight / getCellWidth());
+    return Math.min(250, cols * (rowsFit + extraRows));
+  }
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  const gallery = document.getElementById('gallery');
+  const loader  = document.getElementById('loader');
+  const status  = document.getElementById('status');
+  const empty   = document.getElementById('empty');
+  const lb      = document.getElementById('lightbox');
+  const lbContent = document.getElementById('lb-content');
+  const lbMeta  = document.getElementById('lb-meta');
+  const lbPrev  = document.getElementById('lb-prev');
+  const lbNext  = document.getElementById('lb-next');
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const iconVideo = `<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40">
+    <path d="M5 4a1 1 0 0 0-1 1v14a1 1 0 0 0 1.5.87l13-7a1 1 0 0 0 0-1.74l-13-7A1 1 0 0 0 5 4z"/>
+  </svg>`;
+  const iconFile = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+  </svg>`;
+
+  function updateStatus() {
+    status.textContent = items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : '';
+  }
+
+  // ── Render a single card ───────────────────────────────────────────────────
+  function buildCard(item, globalIndex) {
+    const card = document.createElement('div');
+    card.className = 'media-card';
+    card.setAttribute('role', 'listitem');
+    card.setAttribute('tabindex', '0');
+    card.title = item.filename || item.sender || '';
+
+    if (item.thumbnail_url) {
+      const img = document.createElement('img');
+      img.alt = item.filename || '';
+      img.loading = 'lazy';
+      img.onload = () => img.classList.add('loaded');
+      img.onerror = () => {
+        // Replace broken image with placeholder
+        card.innerHTML = '';
+        card.appendChild(makePlaceholder(item.type));
+      };
+      img.src = item.thumbnail_url;
+      card.appendChild(img);
+    } else {
+      card.appendChild(makePlaceholder(item.type));
+    }
+
+    if (item.type === 'video') {
+      const badge = document.createElement('div');
+      badge.className = 'video-badge';
+      badge.textContent = '▶ video';
+      card.appendChild(badge);
+    }
+
+    const open = () => openLightbox(globalIndex);
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+
+    return card;
+  }
+
+  function makePlaceholder(type) {
+    const div = document.createElement('div');
+    div.className = 'media-placeholder';
+    div.innerHTML = (type === 'video' ? iconVideo : iconFile) + `<span>${type}</span>`;
+    return div;
+  }
+
+  // ── Fetch & append ─────────────────────────────────────────────────────────
+  async function loadMore(limit) {
+    if (fetching || exhausted) return;
+    fetching = true;
+    loader.classList.add('visible');
+
+    // Declared outside try so the post-finally check can read it.
+    let newItems = [];
+    let serverLoading = false;
+
+    try {
+      const res = await fetch(`/api/media?offset=${offset}&limit=${limit}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      newItems = data.items || [];
+      serverLoading = !!data.loading;
+
+      const startIndex = items.length;
+      items.push(...newItems);
+
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < newItems.length; i++) {
+        frag.appendChild(buildCard(newItems[i], startIndex + i));
+      }
+      gallery.appendChild(frag);
+
+      offset += newItems.length;
+
+      if (!data.has_more && !data.loading) {
+        exhausted = true;
+      }
+
+      updateStatus();
+
+      if (items.length === 0 && !data.has_more && !data.loading) {
+        empty.classList.add('visible');
+      }
+
+      // Server is still fetching from Matrix but returned nothing yet — retry.
+      if (newItems.length === 0 && serverLoading) {
+        setTimeout(() => loadMore(limit), 1200);
+      }
+    } catch (e) {
+      console.error('Failed to load media:', e);
+    } finally {
+      fetching = false;
+      if (exhausted) {
+        loader.innerHTML = items.length ? `${items.length} items — all loaded` : '';
+        loader.classList.toggle('visible', items.length === 0);
+      } else {
+        loader.classList.remove('visible');
+      }
+    }
+
+    // If we got new items but the sentinel is still within the scroll-trigger
+    // zone, keep filling — the IntersectionObserver won't re-fire because the
+    // sentinel never left the intersection area.
+    if (!exhausted && newItems.length > 0 &&
+        sentinel.getBoundingClientRect().top <= window.innerHeight + 400) {
+      loadMore(getGridCols() * 2);
+    }
+  }
+
+  // ── Infinite scroll via IntersectionObserver ───────────────────────────────
+  const sentinel = document.getElementById('sentinel');
+  const io = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadMore(getGridCols() * 2);
+  }, { rootMargin: '400px' });
+  io.observe(sentinel);
+
+  // ── Lightbox ───────────────────────────────────────────────────────────────
+  function openLightbox(index) {
+    lbIndex = index;
+    renderLightbox();
+    lb.classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeLightbox() {
+    lb.classList.remove('open');
+    lbContent.innerHTML = '';
+    document.body.style.overflow = '';
+    lbIndex = -1;
+  }
+
+  function renderLightbox() {
+    const item = items[lbIndex];
+    if (!item) return;
+
+    lbContent.innerHTML = '';
+
+    if (item.type === 'video') {
+      const video = document.createElement('video');
+      video.src = item.original_url;
+      video.controls = true;
+      video.autoplay = true;
+      video.style.cssText = 'max-width:92vw;max-height:85vh;border-radius:4px;';
+      lbContent.appendChild(video);
+    } else {
+      const img = document.createElement('img');
+      img.src = item.original_url;
+      img.alt = item.filename || '';
+      lbContent.appendChild(img);
+    }
+
+    const parts = [item.filename, item.sender].filter(Boolean);
+    lbMeta.textContent = parts.join(' · ');
+
+    lbPrev.disabled = lbIndex <= 0;
+    lbNext.disabled = lbIndex >= items.length - 1;
+
+    // If nearing the end, pre-load more
+    if (lbIndex >= items.length - 5) loadMore();
+  }
+
+  document.getElementById('lb-close').addEventListener('click', closeLightbox);
+  lbPrev.addEventListener('click', () => { if (lbIndex > 0) { lbIndex--; renderLightbox(); } });
+  lbNext.addEventListener('click', () => {
+    if (lbIndex < items.length - 1) { lbIndex++; renderLightbox(); }
+  });
+
+  lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
+
+  document.addEventListener('keydown', e => {
+    if (!lb.classList.contains('open')) return;
+    if (e.key === 'Escape') { closeLightbox(); return; }
+    if (e.key === 'ArrowLeft'  && lbIndex > 0)              { lbIndex--; renderLightbox(); }
+    if (e.key === 'ArrowRight' && lbIndex < items.length-1) { lbIndex++; renderLightbox(); }
+  });
+
+  // ── Kick off ───────────────────────────────────────────────────────────────
+  // Initial load: exactly enough rows to fill the viewport plus one extra row.
+  loadMore(calcBatch(1));
+})();
+</script>
+</body>
+</html>
