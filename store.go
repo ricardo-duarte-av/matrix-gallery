@@ -16,10 +16,32 @@ type Store struct {
 	loading bool
 
 	fetcher *MatrixFetcher
+	precache chan MediaItem
 }
 
-func newStore(fetcher *MatrixFetcher) *Store {
-	return &Store{fetcher: fetcher}
+type ThumbPrecacher interface {
+	Precache(server, mediaID string)
+}
+
+func newStore(fetcher *MatrixFetcher, precacher ThumbPrecacher) *Store {
+	s := &Store{
+		fetcher:  fetcher,
+		precache: make(chan MediaItem, 500),
+	}
+	if precacher != nil {
+		for i := 0; i < 5; i++ {
+			go s.runPrecacheWorker(precacher)
+		}
+	}
+	return s
+}
+
+func (s *Store) runPrecacheWorker(p ThumbPrecacher) {
+	for item := range s.precache {
+		if item.ThumbServer != "" && item.ThumbMediaID != "" {
+			p.Precache(item.ThumbServer, item.ThumbMediaID)
+		}
+	}
 }
 
 // GetPage returns a slice of items at [offset, offset+limit) and whether more exist.
@@ -89,6 +111,13 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 			s.done = true
 		} else {
 			s.cursor = nextCursor
+			for _, item := range items {
+				select {
+				case s.precache <- item:
+				default:
+					// queue full, skip
+				}
+			}
 		}
 		log.Printf("Fetched %d media items (total: %d, exhausted: %v)", len(items), len(s.items), s.done)
 	}()

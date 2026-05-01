@@ -47,32 +47,44 @@ func (p *Proxy) thumbCachePath(server, mediaID string) string {
 }
 
 // ServeThumb serves a thumbnail for the given mxc media, using the local cache
-// when available. On a cache miss it tries the Matrix thumbnail endpoint first,
-// then falls back to downloading the original and resizing it locally.
+// when available.
 func (p *Proxy) ServeThumb(w http.ResponseWriter, r *http.Request, server, mediaID string) {
-	cachePath := p.thumbCachePath(server, mediaID)
-
-	if data, err := os.ReadFile(cachePath); err == nil {
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Write(data)
-		return
-	}
-
-	data, err := p.fetchThumbnail(r.Context(), server, mediaID)
+	data, err := p.getOrFetchThumb(r.Context(), server, mediaID)
 	if err != nil {
 		log.Printf("Thumbnail unavailable for %s/%s: %v", server, mediaID, err)
 		p.serveFilePlaceholder(w)
 		return
 	}
 
-	if werr := os.WriteFile(cachePath, data, 0644); werr != nil {
-		log.Printf("Warning: could not cache thumbnail %s: %v", cachePath, werr)
-	}
-
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(data)
+}
+
+// Precache ensures a thumbnail for the given media is in the local cache.
+func (p *Proxy) Precache(server, mediaID string) {
+	_, err := p.getOrFetchThumb(context.Background(), server, mediaID)
+	if err != nil {
+		log.Printf("Pre-cache failed for %s/%s: %v", server, mediaID, err)
+	}
+}
+
+func (p *Proxy) getOrFetchThumb(ctx context.Context, server, mediaID string) ([]byte, error) {
+	cachePath := p.thumbCachePath(server, mediaID)
+
+	if data, err := os.ReadFile(cachePath); err == nil {
+		return data, nil
+	}
+
+	data, err := p.fetchThumbnail(ctx, server, mediaID)
+	if err != nil {
+		return nil, err
+	}
+
+	if werr := os.WriteFile(cachePath, data, 0644); werr != nil {
+		log.Printf("Warning: could not cache thumbnail %s: %v", cachePath, werr)
+	}
+	return data, nil
 }
 
 // fetchThumbnail attempts to obtain JPEG thumbnail bytes for the given media.

@@ -20,6 +20,10 @@ type MediaItem struct {
 	MimeType     string `json:"mime_type,omitempty"`
 	Sender       string `json:"sender,omitempty"`
 	Timestamp    int64  `json:"timestamp,omitempty"`
+
+	// Original MXC details for the thumbnail, used for pre-caching.
+	ThumbServer  string `json:"-"`
+	ThumbMediaID string `json:"-"`
 }
 
 type MatrixFetcher struct {
@@ -95,10 +99,15 @@ func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaIt
 	// Use the event's thumbnail_url if present; otherwise the proxy will
 	// generate a thumbnail from the original on first request.
 	thumbURL := mxcToProxy(origURI, "thumb")
+	thumbServer := origURI.Homeserver
+	thumbMediaID := origURI.FileID
+
 	if msg.Info != nil && msg.Info.ThumbnailURL != "" {
 		thumbURI := msg.Info.ThumbnailURL.ParseOrIgnore()
 		if !thumbURI.IsEmpty() {
 			thumbURL = mxcToProxy(thumbURI, "thumb")
+			thumbServer = thumbURI.Homeserver
+			thumbMediaID = thumbURI.FileID
 		}
 	}
 
@@ -121,6 +130,8 @@ func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaIt
 		MimeType:     mimeType,
 		Sender:       evt.Sender.String(),
 		Timestamp:    evt.Timestamp,
+		ThumbServer:  thumbServer,
+		ThumbMediaID: thumbMediaID,
 	}, true
 }
 

@@ -27,7 +27,7 @@ func main() {
 		log.Fatalf("Proxy setup error: %v", err)
 	}
 
-	store := newStore(fetcher)
+	store := newStore(fetcher, proxy)
 	h := newHandler(store, proxy)
 
 	// Kick off the first batch fetch so media is ready quickly.
