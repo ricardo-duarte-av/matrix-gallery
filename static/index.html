@@ -17,7 +17,7 @@
   }
 
   html, body {
-    height: 100%;
+    min-height: 100vh;
     background: var(--bg);
     color: var(--text);
     font-family: system-ui, -apple-system, sans-serif;
@@ -414,8 +414,8 @@
       if (newItemsFiltered.length === 0 && newItems.length > 0 && !exhausted) {
         // All items in this batch were duplicates, fetch more immediately
         offset += newItems.length;
-        fetching = false;
-        return loadMore(limit);
+        setTimeout(() => loadMore(limit), 0);
+        return;
       }
 
       const startIndex = items.length;
@@ -459,8 +459,8 @@
     // zone, keep filling — the IntersectionObserver won't re-fire because the
     // sentinel never left the intersection area.
     if (!exhausted && newItems.length > 0 &&
-        sentinel.getBoundingClientRect().top <= window.innerHeight + 400) {
-      loadMore(getGridCols() * 2);
+        sentinel.getBoundingClientRect().top <= window.innerHeight + 1000) {
+      loadMore(getGridCols() * 4);
     }
   }
 
