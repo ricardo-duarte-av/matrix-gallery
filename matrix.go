@@ -70,32 +70,44 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit 
 	return items, resp.End, resp.Start, nil
 }
 
-// FetchForward retrieves message events going forward from fromToken.
-func (f *MatrixFetcher) FetchForward(ctx context.Context, fromToken string) ([]MediaItem, string, error) {
-	resp, err := f.client.Messages(ctx, f.roomID, fromToken, "", mautrix.DirectionForward, nil, 50)
+// SyncOnce performs a single long-poll sync.
+func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string, timeout int) ([]MediaItem, string, error) {
+	resp, err := f.client.SyncRequest(ctx, timeout, since, "", false, "")
 	if err != nil {
-		return nil, "", fmt.Errorf("fetching messages forward: %w", err)
+		return nil, "", err
 	}
 
 	var items []MediaItem
-	// Forward messages come in chronological order; we want newest-first for the store.
-	// So we'll iterate backwards.
-	for i := len(resp.Chunk) - 1; i >= 0; i-- {
-		evt := resp.Chunk[i]
-		if evt.Type != event.EventMessage && evt.Type != event.EventSticker {
-			continue
+	room, ok := resp.Rooms.Join[f.roomID]
+	if ok {
+		// Timeline events are chronological; we want newest-first for the store.
+		for i := len(room.Timeline.Events) - 1; i >= 0; i-- {
+			evt := room.Timeline.Events[i]
+			if evt.Type != event.EventMessage && evt.Type != event.EventSticker {
+				continue
+			}
+			if err := evt.Content.ParseRaw(evt.Type); err != nil {
+				continue
+			}
+			msg := evt.Content.AsMessage()
+			item, ok := extractMediaItem(evt, msg)
+			if !ok {
+				continue
+			}
+			items = append(items, item)
 		}
-		if err := evt.Content.ParseRaw(evt.Type); err != nil {
-			continue
-		}
-		msg := evt.Content.AsMessage()
-		item, ok := extractMediaItem(evt, msg)
-		if !ok {
-			continue
-		}
-		items = append(items, item)
 	}
-	return items, resp.End, nil
+
+	return items, resp.NextBatch, nil
+}
+
+// GetNowToken returns the latest sync token.
+func (f *MatrixFetcher) GetNowToken(ctx context.Context) (string, error) {
+	resp, err := f.client.SyncRequest(ctx, 0, "", "", false, "")
+	if err != nil {
+		return "", err
+	}
+	return resp.NextBatch, nil
 }
 
 func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaItem, bool) {

@@ -55,12 +55,25 @@
   }
 
   .media-card {
-    position: relative;
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
     background: var(--surface);
     cursor: pointer;
+    border-radius: 4px;
+    overflow: hidden;
+    transition: transform .2s ease;
+  }
+  .media-card:hover { 
+    transform: translateY(-2px);
+    background: #222;
+  }
+
+  .media-thumb-wrap {
+    position: relative;
     aspect-ratio: 1;
-    border-radius: 2px;
+    width: 100%;
+    overflow: hidden;
+    background: #000;
   }
 
   .media-card img {
@@ -72,7 +85,7 @@
     opacity: 0;
   }
   .media-card img.loaded { opacity: 1; }
-  .media-card:hover img { transform: scale(1.06); }
+  .media-card:hover .media-thumb-wrap img { transform: scale(1.06); }
 
   /* Video badge */
   .video-badge {
@@ -101,6 +114,20 @@
     font-size: .8rem;
   }
   .media-placeholder svg { width: 40px; height: 40px; }
+  
+  .media-info {
+    padding: 8px;
+    border-top: 1px solid #222;
+  }
+  .media-date {
+    font-size: .7rem;
+    color: var(--muted);
+    font-family: inherit;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* ── Infinite scroll sentinel & loader ── */
   #sentinel { height: 1px; }
@@ -313,27 +340,42 @@
     card.setAttribute('tabindex', '0');
     card.title = item.filename || item.sender || '';
 
+    const thumbWrap = document.createElement('div');
+    thumbWrap.className = 'media-thumb-wrap';
+    card.appendChild(thumbWrap);
+
     if (item.thumbnail_url) {
       const img = document.createElement('img');
       img.alt = item.filename || '';
       img.loading = 'lazy';
       img.onload = () => img.classList.add('loaded');
       img.onerror = () => {
-        // Replace broken image with placeholder
-        card.innerHTML = '';
-        card.appendChild(makePlaceholder(item.type));
+        thumbWrap.innerHTML = '';
+        thumbWrap.appendChild(makePlaceholder(item.type));
       };
       img.src = item.thumbnail_url;
-      card.appendChild(img);
+      thumbWrap.appendChild(img);
     } else {
-      card.appendChild(makePlaceholder(item.type));
+      thumbWrap.appendChild(makePlaceholder(item.type));
     }
 
     if (item.type === 'video') {
       const badge = document.createElement('div');
       badge.className = 'video-badge';
       badge.textContent = '▶ video';
-      card.appendChild(badge);
+      thumbWrap.appendChild(badge);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'media-info';
+    card.appendChild(info);
+
+    if (item.timestamp) {
+      const dt = new Date(item.timestamp);
+      const dateEl = document.createElement('div');
+      dateEl.className = 'media-date';
+      dateEl.textContent = dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      info.appendChild(dateEl);
     }
 
     const open = () => openLightbox(globalIndex);
@@ -368,12 +410,20 @@
       newItems = data.items || [];
       serverLoading = !!data.loading;
 
+      const newItemsFiltered = newItems.filter(ni => !items.some(i => i.event_id === ni.event_id));
+      if (newItemsFiltered.length === 0 && newItems.length > 0 && !exhausted) {
+        // All items in this batch were duplicates, fetch more immediately
+        offset += newItems.length;
+        fetching = false;
+        return loadMore(limit);
+      }
+
       const startIndex = items.length;
-      items.push(...newItems);
+      items.push(...newItemsFiltered);
 
       const frag = document.createDocumentFragment();
-      for (let i = 0; i < newItems.length; i++) {
-        frag.appendChild(buildCard(newItems[i], startIndex + i));
+      for (let i = 0; i < newItemsFiltered.length; i++) {
+        frag.appendChild(buildCard(newItemsFiltered[i], startIndex + i));
       }
       gallery.appendChild(frag);
 

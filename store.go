@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"sort"
 	"sync"
 )
 
@@ -96,7 +97,7 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 	s.mu.Unlock()
 
 	go func() {
-		items, nextCursor, startCursor, err := s.fetcher.FetchBatch(ctx, cursor, 100)
+		items, nextCursor, _, err := s.fetcher.FetchBatch(ctx, cursor, 100)
 
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -108,14 +109,14 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 		}
 
 		s.items = append(s.items, items...)
+		sort.Slice(s.items, func(i, j int) bool {
+			return s.items[i].Timestamp > s.items[j].Timestamp
+		})
+
 		if nextCursor == "" || len(items) == 0 {
 			s.done = true
 		} else {
 			s.cursor = nextCursor
-			// If this was the first fetch, the startCursor is our forward sync point.
-			if cursor == "" && s.sync == "" {
-				s.sync = startCursor
-			}
 			for _, item := range items {
 				select {
 				case s.precache <- item:
@@ -135,20 +136,31 @@ func (s *Store) PollNew(ctx context.Context) {
 	s.mu.RUnlock()
 
 	if syncToken == "" {
+		now, err := s.fetcher.GetNowToken(ctx)
+		if err == nil && now != "" {
+			s.mu.Lock()
+			if s.sync == "" {
+				s.sync = now
+			}
+			s.mu.Unlock()
+		}
 		return
 	}
 
-	log.Printf("Polling for new media since %s...", syncToken)
-	items, nextSync, err := s.fetcher.FetchForward(ctx, syncToken)
+	log.Printf("Syncing for new media since %s...", syncToken)
+	items, nextSync, err := s.fetcher.SyncOnce(ctx, syncToken, 10000)
 	if err != nil {
-		log.Printf("Error polling for new media: %v", err)
+		log.Printf("Error syncing for new media: %v", err)
 		return
 	}
 
 	if len(items) > 0 {
 		s.mu.Lock()
-		// Prepend new items (newest-first)
+		// Prepend new items and re-sort to be sure
 		s.items = append(items, s.items...)
+		sort.Slice(s.items, func(i, j int) bool {
+			return s.items[i].Timestamp > s.items[j].Timestamp
+		})
 		s.sync = nextSync
 		s.mu.Unlock()
 
