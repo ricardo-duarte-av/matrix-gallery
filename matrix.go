@@ -44,11 +44,11 @@ func newMatrixFetcher(cfg *Config) (*MatrixFetcher, error) {
 
 // FetchBatch retrieves up to limit message events going backward from fromToken.
 // Pass an empty fromToken to start from the latest events in the room.
-// Returns the media items found and the next pagination token.
-func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit int) ([]MediaItem, string, error) {
+// Returns the media items found, the next backward token, and the forward token (only on first call).
+func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit int) ([]MediaItem, string, string, error) {
 	resp, err := f.client.Messages(ctx, f.roomID, fromToken, "", mautrix.DirectionBackward, nil, limit)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetching messages: %w", err)
+		return nil, "", "", fmt.Errorf("fetching messages: %w", err)
 	}
 
 	var items []MediaItem
@@ -67,6 +67,34 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit 
 		items = append(items, item)
 	}
 
+	return items, resp.End, resp.Start, nil
+}
+
+// FetchForward retrieves message events going forward from fromToken.
+func (f *MatrixFetcher) FetchForward(ctx context.Context, fromToken string) ([]MediaItem, string, error) {
+	resp, err := f.client.Messages(ctx, f.roomID, fromToken, "", mautrix.DirectionForward, nil, 50)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetching messages forward: %w", err)
+	}
+
+	var items []MediaItem
+	// Forward messages come in chronological order; we want newest-first for the store.
+	// So we'll iterate backwards.
+	for i := len(resp.Chunk) - 1; i >= 0; i-- {
+		evt := resp.Chunk[i]
+		if evt.Type != event.EventMessage && evt.Type != event.EventSticker {
+			continue
+		}
+		if err := evt.Content.ParseRaw(evt.Type); err != nil {
+			continue
+		}
+		msg := evt.Content.AsMessage()
+		item, ok := extractMediaItem(evt, msg)
+		if !ok {
+			continue
+		}
+		items = append(items, item)
+	}
 	return items, resp.End, nil
 }
 

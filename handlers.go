@@ -34,6 +34,7 @@ func (h *Handler) handleAPIMedia(w http.ResponseWriter, r *http.Request) {
 	items, hasMore, total := h.store.GetPage(offset, limit)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]any{
 		"items":    items,
 		"has_more": hasMore,

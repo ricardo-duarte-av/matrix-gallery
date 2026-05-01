@@ -12,6 +12,7 @@ type Store struct {
 	mu      sync.RWMutex
 	items   []MediaItem
 	cursor  string // Matrix pagination token for the next backward batch
+	sync    string // Matrix pagination token for the next forward batch
 	done    bool   // true when there are no more events to fetch
 	loading bool
 
@@ -95,7 +96,7 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 	s.mu.Unlock()
 
 	go func() {
-		items, nextCursor, err := s.fetcher.FetchBatch(ctx, cursor, 100)
+		items, nextCursor, startCursor, err := s.fetcher.FetchBatch(ctx, cursor, 100)
 
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -111,6 +112,10 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 			s.done = true
 		} else {
 			s.cursor = nextCursor
+			// If this was the first fetch, the startCursor is our forward sync point.
+			if cursor == "" && s.sync == "" {
+				s.sync = startCursor
+			}
 			for _, item := range items {
 				select {
 				case s.precache <- item:
@@ -121,4 +126,42 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 		}
 		log.Printf("Fetched %d media items (total: %d, exhausted: %v)", len(items), len(s.items), s.done)
 	}()
+}
+
+// PollNew checks for new events forward from the sync point and prepends them.
+func (s *Store) PollNew(ctx context.Context) {
+	s.mu.RLock()
+	syncToken := s.sync
+	s.mu.RUnlock()
+
+	if syncToken == "" {
+		return
+	}
+
+	log.Printf("Polling for new media since %s...", syncToken)
+	items, nextSync, err := s.fetcher.FetchForward(ctx, syncToken)
+	if err != nil {
+		log.Printf("Error polling for new media: %v", err)
+		return
+	}
+
+	if len(items) > 0 {
+		s.mu.Lock()
+		// Prepend new items (newest-first)
+		s.items = append(items, s.items...)
+		s.sync = nextSync
+		s.mu.Unlock()
+
+		log.Printf("Found %d new media items (total: %d)", len(items), len(s.items))
+		for _, item := range items {
+			select {
+			case s.precache <- item:
+			default:
+			}
+		}
+	} else if nextSync != "" {
+		s.mu.Lock()
+		s.sync = nextSync
+		s.mu.Unlock()
+	}
 }
