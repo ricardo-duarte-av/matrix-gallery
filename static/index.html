@@ -417,9 +417,8 @@
   // ── Infinite scroll via IntersectionObserver ───────────────────────────────
   const sentinel = document.getElementById('sentinel');
   const io = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) loadMore(getGridCols() * 2);
-  }, { rootMargin: '400px' });
-  io.observe(sentinel);
+    if (entries[0].isIntersecting) loadMore(getGridCols() * 4);
+  }, { rootMargin: '600px' });
 
   // ── Lightbox ───────────────────────────────────────────────────────────────
   function openLightbox(index) {
@@ -463,7 +462,7 @@
     lbNext.disabled = lbIndex >= items.length - 1;
 
     // If nearing the end, pre-load more
-    if (lbIndex >= items.length - 5) loadMore();
+    if (lbIndex >= items.length - 5) loadMore(getGridCols() * 2);
   }
 
   document.getElementById('lb-close').addEventListener('click', closeLightbox);
@@ -482,8 +481,12 @@
   });
 
   // ── Kick off ───────────────────────────────────────────────────────────────
-  // Initial load: exactly enough rows to fill the viewport plus one extra row.
-  loadMore(calcBatch(1));
+  // Initial load: exactly enough rows to fill the viewport plus several extra rows.
+  (async () => {
+    await loadMore(calcBatch(3));
+    // Only start observing once the initial batch is in.
+    io.observe(sentinel);
+  })();
 })();
 </script>
 </body>
