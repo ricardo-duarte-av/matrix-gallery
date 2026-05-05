@@ -70,9 +70,11 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit 
 	return items, resp.End, resp.Start, nil
 }
 
-// SyncOnce performs a single long-poll sync.
-func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string, timeout int) ([]MediaItem, string, error) {
-	resp, err := f.client.SyncRequest(ctx, timeout, since, "", false, "")
+// SyncOnce performs a single long-poll sync from the given token.
+// The server holds the connection until new events arrive or timeout elapses.
+func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string) ([]MediaItem, string, error) {
+	// 30 seconds is the Matrix-recommended long-poll timeout
+	resp, err := f.client.SyncRequest(ctx, 30000, since, "", false, "")
 	if err != nil {
 		return nil, "", err
 	}

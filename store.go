@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Store holds all fetched media items and manages incremental loading from Matrix.
@@ -17,7 +19,7 @@ type Store struct {
 	done    bool   // true when there are no more events to fetch
 	loading bool
 
-	fetcher *MatrixFetcher
+	fetcher  *MatrixFetcher
 	precache chan MediaItem
 }
 
@@ -129,51 +131,89 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 	}()
 }
 
-// PollNew checks for new events forward from the sync point and prepends them.
-func (s *Store) PollNew(ctx context.Context) {
-	s.mu.RLock()
-	syncToken := s.sync
-	s.mu.RUnlock()
+// SyncLoop runs a continuous long-poll connection to Matrix /sync.
+// It blocks until ctx is cancelled or an unrecoverable error occurs.
+func (s *Store) SyncLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Sync loop stopped")
+			return
+		default:
+		}
 
-	if syncToken == "" {
-		now, err := s.fetcher.GetNowToken(ctx)
-		if err == nil && now != "" {
-			s.mu.Lock()
-			if s.sync == "" {
-				s.sync = now
+		syncToken, err := s.ensureSyncToken(ctx)
+		if err != nil {
+			log.Printf("Sync error: %v, retrying in 5s", err)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return
 			}
+			continue
+		}
+
+		items, nextSync, err := s.fetcher.SyncOnce(ctx, syncToken)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("Sync error: %v, retrying in 5s", err)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+
+		if len(items) > 0 {
+			s.mu.Lock()
+			s.items = append(items, s.items...)
+			sort.Slice(s.items, func(i, j int) bool {
+				return s.items[i].Timestamp > s.items[j].Timestamp
+			})
+			s.sync = nextSync
+			s.mu.Unlock()
+
+			log.Printf("Sync found %d new media items (total: %d)", len(items), len(s.items))
+			for _, item := range items {
+				select {
+				case s.precache <- item:
+				default:
+				}
+			}
+		} else if nextSync != "" {
+			s.mu.Lock()
+			s.sync = nextSync
 			s.mu.Unlock()
 		}
-		return
+	}
+}
+
+func (s *Store) ensureSyncToken(ctx context.Context) (string, error) {
+	s.mu.RLock()
+	token := s.sync
+	s.mu.RUnlock()
+
+	if token != "" {
+		return token, nil
 	}
 
-	log.Printf("Syncing for new media since %s...", syncToken)
-	items, nextSync, err := s.fetcher.SyncOnce(ctx, syncToken, 10000)
+	now, err := s.fetcher.GetNowToken(ctx)
 	if err != nil {
-		log.Printf("Error syncing for new media: %v", err)
-		return
+		return "", err
+	}
+	if now == "" {
+		return "", fmt.Errorf("empty sync token from server")
 	}
 
-	if len(items) > 0 {
-		s.mu.Lock()
-		// Prepend new items and re-sort to be sure
-		s.items = append(items, s.items...)
-		sort.Slice(s.items, func(i, j int) bool {
-			return s.items[i].Timestamp > s.items[j].Timestamp
-		})
-		s.sync = nextSync
-		s.mu.Unlock()
-
-		log.Printf("Found %d new media items (total: %d)", len(items), len(s.items))
-		for _, item := range items {
-			select {
-			case s.precache <- item:
-			default:
-			}
-		}
-	} else if nextSync != "" {
-		s.mu.Lock()
-		s.sync = nextSync
-		s.mu.Unlock()
+	s.mu.Lock()
+	if s.sync == "" {
+		s.sync = now
 	}
+	token = s.sync
+	s.mu.Unlock()
+
+	return token, nil
 }

@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"time"
 )
 
 //go:embed static
@@ -49,14 +48,9 @@ func main() {
 	mux.Handle("/", noCacheHTML(http.FileServer(http.FS(staticFS))))
 
 	log.Printf("Gallery server listening on http://%s", cfg.ListenAddr())
-	
-	// Periodic sync for new items.
-	go func() {
-		for {
-			time.Sleep(30 * time.Second)
-			store.PollNew(context.Background())
-		}
-	}()
+
+	// Continuous long-poll sync for new items.
+	go store.SyncLoop(context.Background())
 
 	if err := http.ListenAndServe(cfg.ListenAddr(), mux); err != nil {
 		log.Fatalf("Server: %v", err)
