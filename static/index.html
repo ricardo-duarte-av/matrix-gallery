@@ -46,13 +46,16 @@
     text-align: right;
   }
 
-  /* ── Gallery grid ── */
+  /* ── Gallery masonry (CSS columns) ── */
   #gallery {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(clamp(120px, 20vw, 260px), 1fr));
-    gap: var(--gap);
+    column-count: 4;
+    column-gap: 6px;
     padding: var(--gap);
   }
+
+  @media (max-width: 1200px) { #gallery { column-count: 3; } }
+  @media (max-width: 800px)  { #gallery { column-count: 2; } }
+  @media (max-width: 480px)  { #gallery { column-count: 1; } }
 
   .media-card {
     display: flex;
@@ -62,6 +65,8 @@
     border-radius: 4px;
     overflow: hidden;
     transition: transform .2s ease;
+    break-inside: avoid;
+    margin-bottom: 8px;
   }
   .media-card:hover { 
     transform: translateY(-2px);
@@ -70,7 +75,6 @@
 
   .media-thumb-wrap {
     position: relative;
-    aspect-ratio: 1;
     width: 100%;
     overflow: hidden;
     background: #000;
@@ -78,8 +82,6 @@
 
   .media-card img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
     display: block;
     transition: transform .25s ease, opacity .3s;
     opacity: 0;
@@ -288,23 +290,19 @@
   let items = [];         // all loaded MediaItem objects
   let lbIndex = -1;       // currently open lightbox index into `items`
 
-  // ── Grid geometry (must mirror the CSS) ───────────────────────────────────
-  // CSS: grid-template-columns: repeat(auto-fill, minmax(clamp(120px, 20vw, 260px), 1fr))
-  // CSS: gap: 3px
-  const GAP = 3;
-  function getGridCols() {
+  // ── Masonry column count (must mirror the CSS) ────────────────────────────
+  function getMasonryCols() {
     const vw = window.innerWidth;
-    const minW = Math.min(260, Math.max(120, vw * 0.2));
-    return Math.max(1, Math.floor((vw + GAP) / (minW + GAP)));
-  }
-  function getCellWidth() {
-    const cols = getGridCols();
-    return (window.innerWidth - GAP * (cols - 1)) / cols;
+    if (vw <= 480) return 1;
+    if (vw <= 800) return 2;
+    if (vw <= 1200) return 3;
+    return 4;
   }
   // Items needed to fill the viewport plus `extraRows` additional rows.
   function calcBatch(extraRows) {
-    const cols = getGridCols();
-    const rowsFit = Math.ceil(window.innerHeight / getCellWidth());
+    const cols = getMasonryCols();
+    const avgCardHeight = window.innerWidth / cols * 1.2; // ~20% taller than wide on average
+    const rowsFit = Math.ceil(window.innerHeight / avgCardHeight);
     return Math.min(250, cols * (rowsFit + extraRows));
   }
 
@@ -460,14 +458,14 @@
     // sentinel never left the intersection area.
     if (!exhausted && newItems.length > 0 &&
         sentinel.getBoundingClientRect().top <= window.innerHeight + 1000) {
-      loadMore(getGridCols() * 4);
+      loadMore(getMasonryCols() * 4);
     }
   }
 
   // ── Infinite scroll via IntersectionObserver ───────────────────────────────
   const sentinel = document.getElementById('sentinel');
   const io = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) loadMore(getGridCols() * 4);
+    if (entries[0].isIntersecting) loadMore(getMasonryCols() * 4);
   }, { rootMargin: '600px' });
 
   // ── Lightbox ───────────────────────────────────────────────────────────────
@@ -512,7 +510,7 @@
     lbNext.disabled = lbIndex >= items.length - 1;
 
     // If nearing the end, pre-load more
-    if (lbIndex >= items.length - 5) loadMore(getGridCols() * 2);
+    if (lbIndex >= items.length - 5) loadMore(getMasonryCols() * 2);
   }
 
   document.getElementById('lb-close').addEventListener('click', closeLightbox);
