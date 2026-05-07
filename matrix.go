@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -10,25 +11,33 @@ import (
 )
 
 type MediaItem struct {
-	EventID      string `json:"event_id"`
-	Type         string `json:"type"` // "image", "video", "file"
-	ThumbnailURL string `json:"thumbnail_url"`
-	OriginalURL  string `json:"original_url"`
-	Filename     string `json:"filename"`
-	Width        int    `json:"width,omitempty"`
-	Height       int    `json:"height,omitempty"`
-	MimeType     string `json:"mime_type,omitempty"`
-	Sender       string `json:"sender,omitempty"`
-	Timestamp    int64  `json:"timestamp,omitempty"`
+	EventID         string `json:"event_id"`
+	Type            string `json:"type"` // "image", "video", "file"
+	ThumbnailURL    string `json:"thumbnail_url"`
+	OriginalURL     string `json:"original_url"`
+	Filename        string `json:"filename"`
+	Width           int    `json:"width,omitempty"`
+	Height          int    `json:"height,omitempty"`
+	MimeType        string `json:"mime_type,omitempty"`
+	Sender          string `json:"sender,omitempty"`
+	DisplayName     string `json:"display_name,omitempty"`
+	SenderAvatarURL string `json:"sender_avatar_url,omitempty"`
+	Timestamp       int64  `json:"timestamp,omitempty"`
 
 	// Original MXC details for the thumbnail, used for pre-caching.
 	ThumbServer  string `json:"-"`
 	ThumbMediaID string `json:"-"`
 }
 
+type memberInfo struct {
+	DisplayName string
+	AvatarURL   string // proxy URL, empty if none
+}
+
 type MatrixFetcher struct {
-	client *mautrix.Client
-	roomID id.RoomID
+	client      *mautrix.Client
+	roomID      id.RoomID
+	memberCache sync.Map // map[string]memberInfo
 }
 
 func newMatrixFetcher(cfg *Config) (*MatrixFetcher, error) {
@@ -40,6 +49,28 @@ func newMatrixFetcher(cfg *Config) (*MatrixFetcher, error) {
 		client: client,
 		roomID: id.RoomID(cfg.RoomID),
 	}, nil
+}
+
+// getMember returns cached or freshly fetched display name and avatar for a user.
+func (f *MatrixFetcher) getMember(ctx context.Context, userID id.UserID) memberInfo {
+	key := userID.String()
+	if v, ok := f.memberCache.Load(key); ok {
+		return v.(memberInfo)
+	}
+
+	var content event.MemberEventContent
+	err := f.client.StateEvent(ctx, f.roomID, event.StateMember, key, &content)
+
+	info := memberInfo{DisplayName: content.Displayname}
+	if err == nil && content.AvatarURL != "" {
+		uri := content.AvatarURL.ParseOrIgnore()
+		if !uri.IsEmpty() {
+			info.AvatarURL = mxcToProxy(uri, "thumb")
+		}
+	}
+
+	f.memberCache.Store(key, info)
+	return info
 }
 
 // FetchBatch retrieves up to limit message events going backward from fromToken.
@@ -64,6 +95,9 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit 
 		if !ok {
 			continue
 		}
+		m := f.getMember(ctx, evt.Sender)
+		item.DisplayName = m.DisplayName
+		item.SenderAvatarURL = m.AvatarURL
 		items = append(items, item)
 	}
 
@@ -96,6 +130,9 @@ func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string) ([]MediaItem
 			if !ok {
 				continue
 			}
+			m := f.getMember(ctx, evt.Sender)
+			item.DisplayName = m.DisplayName
+			item.SenderAvatarURL = m.AvatarURL
 			items = append(items, item)
 		}
 	}

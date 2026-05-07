@@ -13,6 +13,7 @@
     --accent: #7c3aed;
     --text: #e5e5e5;
     --muted: #6b7280;
+    --col-width: 240px;
     --gap: 3px;
   }
 
@@ -46,15 +47,14 @@
     text-align: right;
   }
 
-  /* ── Gallery grid ── */
+  /* ── Masonry gallery ── */
   #gallery {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(clamp(120px, 20vw, 260px), 1fr));
-    gap: var(--gap);
-    padding: var(--gap);
+    position: relative;
+    /* height is set by JS masonry engine */
   }
 
   .media-card {
+    position: absolute;
     display: flex;
     flex-direction: column;
     background: var(--surface);
@@ -62,21 +62,22 @@
     border-radius: 4px;
     overflow: hidden;
     transition: transform .2s ease;
+    /* width is set by JS masonry engine */
   }
-  .media-card:hover { 
+  .media-card:hover {
     transform: translateY(-2px);
     background: #222;
   }
 
   .media-thumb-wrap {
     position: relative;
-    aspect-ratio: 1;
     width: 100%;
     overflow: hidden;
     background: #000;
+    /* no fixed height — images drive the height */
   }
 
-  .media-card img {
+  .media-thumb-wrap img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -84,7 +85,7 @@
     transition: transform .25s ease, opacity .3s;
     opacity: 0;
   }
-  .media-card img.loaded { opacity: 1; }
+  .media-thumb-wrap img.loaded { opacity: 1; }
   .media-card:hover .media-thumb-wrap img { transform: scale(1.06); }
 
   /* Video badge */
@@ -104,7 +105,7 @@
   /* Placeholder for items with no thumbnail */
   .media-placeholder {
     width: 100%;
-    height: 100%;
+    height: 160px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -114,16 +115,55 @@
     font-size: .8rem;
   }
   .media-placeholder svg { width: 40px; height: 40px; }
-  
+
   .media-info {
-    padding: 8px;
+    padding: 6px 8px;
     border-top: 1px solid #222;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .sender-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: #2a2a2a;
+  }
+  .sender-avatar-placeholder {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .65rem;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+    text-transform: uppercase;
+  }
+
+  .media-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 1px;
+  }
+  .media-sender-name {
+    font-size: .72rem;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .media-date {
-    font-size: .7rem;
+    font-size: .65rem;
     color: var(--muted);
-    font-family: inherit;
-    display: block;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -288,36 +328,80 @@
   let items = [];         // all loaded MediaItem objects
   let lbIndex = -1;       // currently open lightbox index into `items`
 
-  // ── Grid geometry (must mirror the CSS) ───────────────────────────────────
-  // CSS: grid-template-columns: repeat(auto-fill, minmax(clamp(120px, 20vw, 260px), 1fr))
-  // CSS: gap: 3px
+  // ── Masonry engine ─────────────────────────────────────────────────────────
+  const COL_WIDTH = 240;
   const GAP = 3;
-  function getGridCols() {
-    const vw = window.innerWidth;
-    const minW = Math.min(260, Math.max(120, vw * 0.2));
-    return Math.max(1, Math.floor((vw + GAP) / (minW + GAP)));
+
+  let mCols = 1;
+  let mColH = [0];          // running height of each column
+  let relayoutTimer = null;
+
+  function masonryInit() {
+    const w = gallery.clientWidth || window.innerWidth;
+    mCols = Math.max(1, Math.floor((w + GAP) / (COL_WIDTH + GAP)));
+    mColH = new Array(mCols).fill(0);
   }
-  function getCellWidth() {
-    const cols = getGridCols();
-    return (window.innerWidth - GAP * (cols - 1)) / cols;
+
+  // Full relayout of every card already in the gallery.
+  function masonryRelayout() {
+    masonryInit();
+    const cards = gallery.querySelectorAll('.media-card');
+    cards.forEach(card => placeCard(card, false));
+    syncGalleryHeight();
   }
-  // Items needed to fill the viewport plus `extraRows` additional rows.
+
+  // Place a single card in the shortest column.
+  // Pass commit=true when appending a brand-new card so we don't reset state.
+  function placeCard(card, commit) {
+    if (commit) {
+      // Reset only when appending incrementally
+    }
+    const col = mColH.indexOf(Math.min(...mColH));
+    card.style.left = col * (COL_WIDTH + GAP) + 'px';
+    card.style.top  = mColH[col] + 'px';
+    card.style.width = COL_WIDTH + 'px';
+    mColH[col] += card.offsetHeight + GAP;
+  }
+
+  function syncGalleryHeight() {
+    gallery.style.height = Math.max(...mColH) + 'px';
+  }
+
+  function scheduleRelayout() {
+    clearTimeout(relayoutTimer);
+    relayoutTimer = setTimeout(() => {
+      masonryRelayout();
+    }, 60);
+  }
+
+  // Append new cards to the gallery and place them into the masonry grid.
+  function appendCards(newCards) {
+    newCards.forEach(card => {
+      card.style.width = COL_WIDTH + 'px';
+      gallery.appendChild(card);
+      placeCard(card, true);
+    });
+    syncGalleryHeight();
+  }
+
+  // ── Batch size helpers ─────────────────────────────────────────────────────
+  function getCols() { return mCols; }
+
   function calcBatch(extraRows) {
-    const cols = getGridCols();
-    const rowsFit = Math.ceil(window.innerHeight / getCellWidth());
-    return Math.min(250, cols * (rowsFit + extraRows));
+    const rowsFit = Math.ceil(window.innerHeight / COL_WIDTH);
+    return Math.min(250, mCols * (rowsFit + extraRows));
   }
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
-  const gallery = document.getElementById('gallery');
-  const loader  = document.getElementById('loader');
-  const status  = document.getElementById('status');
-  const empty   = document.getElementById('empty');
-  const lb      = document.getElementById('lightbox');
+  const gallery   = document.getElementById('gallery');
+  const loader    = document.getElementById('loader');
+  const status    = document.getElementById('status');
+  const empty     = document.getElementById('empty');
+  const lb        = document.getElementById('lightbox');
   const lbContent = document.getElementById('lb-content');
-  const lbMeta  = document.getElementById('lb-meta');
-  const lbPrev  = document.getElementById('lb-prev');
-  const lbNext  = document.getElementById('lb-next');
+  const lbMeta    = document.getElementById('lb-meta');
+  const lbPrev    = document.getElementById('lb-prev');
+  const lbNext    = document.getElementById('lb-next');
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const iconVideo = `<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40">
@@ -332,6 +416,21 @@
     status.textContent = items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : '';
   }
 
+  // ── Sender helpers ─────────────────────────────────────────────────────────
+  function localpart(mxid) {
+    // "@user:server" → "user"
+    if (!mxid) return '?';
+    const colon = mxid.indexOf(':');
+    return mxid.slice(1, colon > 0 ? colon : undefined) || mxid;
+  }
+
+  function makeAvatarPlaceholder(name) {
+    const div = document.createElement('div');
+    div.className = 'sender-avatar-placeholder';
+    div.textContent = (name || '?')[0];
+    return div;
+  }
+
   // ── Render a single card ───────────────────────────────────────────────────
   function buildCard(item, globalIndex) {
     const card = document.createElement('div');
@@ -342,6 +441,13 @@
 
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'media-thumb-wrap';
+    // Pre-size the thumb container from known dimensions so the masonry
+    // measures the correct card height immediately, before any image loads.
+    if (item.width && item.height) {
+      thumbWrap.style.height = Math.round(COL_WIDTH * item.height / item.width) + 'px';
+    } else {
+      thumbWrap.style.height = '180px'; // sensible fallback
+    }
     card.appendChild(thumbWrap);
 
     if (item.thumbnail_url) {
@@ -352,6 +458,7 @@
       img.onerror = () => {
         thumbWrap.innerHTML = '';
         thumbWrap.appendChild(makePlaceholder(item.type));
+        scheduleRelayout();
       };
       img.src = item.thumbnail_url;
       thumbWrap.appendChild(img);
@@ -370,12 +477,34 @@
     info.className = 'media-info';
     card.appendChild(info);
 
+    // Avatar: real image or fallback initial
+    const displayName = item.display_name || localpart(item.sender);
+    if (item.sender_avatar_url) {
+      const av = document.createElement('img');
+      av.className = 'sender-avatar';
+      av.src = item.sender_avatar_url;
+      av.alt = displayName;
+      av.onerror = () => { av.replaceWith(makeAvatarPlaceholder(displayName)); };
+      info.appendChild(av);
+    } else {
+      info.appendChild(makeAvatarPlaceholder(displayName));
+    }
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'media-text';
+    info.appendChild(textWrap);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'media-sender-name';
+    nameEl.textContent = displayName;
+    textWrap.appendChild(nameEl);
+
     if (item.timestamp) {
       const dt = new Date(item.timestamp);
       const dateEl = document.createElement('div');
       dateEl.className = 'media-date';
       dateEl.textContent = dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-      info.appendChild(dateEl);
+      textWrap.appendChild(dateEl);
     }
 
     const open = () => openLightbox(globalIndex);
@@ -398,7 +527,6 @@
     fetching = true;
     loader.classList.add('visible');
 
-    // Declared outside try so the post-finally check can read it.
     let newItems = [];
     let serverLoading = false;
 
@@ -412,7 +540,6 @@
 
       const newItemsFiltered = newItems.filter(ni => !items.some(i => i.event_id === ni.event_id));
       if (newItemsFiltered.length === 0 && newItems.length > 0 && !exhausted) {
-        // All items in this batch were duplicates, fetch more immediately
         offset += newItems.length;
         setTimeout(() => loadMore(limit), 0);
         return;
@@ -421,11 +548,8 @@
       const startIndex = items.length;
       items.push(...newItemsFiltered);
 
-      const frag = document.createDocumentFragment();
-      for (let i = 0; i < newItemsFiltered.length; i++) {
-        frag.appendChild(buildCard(newItemsFiltered[i], startIndex + i));
-      }
-      gallery.appendChild(frag);
+      const cards = newItemsFiltered.map((item, i) => buildCard(item, startIndex + i));
+      appendCards(cards);
 
       offset += newItems.length;
 
@@ -439,7 +563,6 @@
         empty.classList.add('visible');
       }
 
-      // Server is still fetching from Matrix but returned nothing yet — retry.
       if (newItems.length === 0 && serverLoading) {
         setTimeout(() => loadMore(limit), 1200);
       }
@@ -455,20 +578,20 @@
       }
     }
 
-    // If we got new items but the sentinel is still within the scroll-trigger
-    // zone, keep filling — the IntersectionObserver won't re-fire because the
-    // sentinel never left the intersection area.
     if (!exhausted && newItems.length > 0 &&
         sentinel.getBoundingClientRect().top <= window.innerHeight + 1000) {
-      loadMore(getGridCols() * 4);
+      loadMore(getCols() * 4);
     }
   }
 
   // ── Infinite scroll via IntersectionObserver ───────────────────────────────
   const sentinel = document.getElementById('sentinel');
   const io = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) loadMore(getGridCols() * 4);
+    if (entries[0].isIntersecting) loadMore(getCols() * 4);
   }, { rootMargin: '600px' });
+
+  // ── Window resize ──────────────────────────────────────────────────────────
+  window.addEventListener('resize', scheduleRelayout);
 
   // ── Lightbox ───────────────────────────────────────────────────────────────
   function openLightbox(index) {
@@ -511,8 +634,7 @@
     lbPrev.disabled = lbIndex <= 0;
     lbNext.disabled = lbIndex >= items.length - 1;
 
-    // If nearing the end, pre-load more
-    if (lbIndex >= items.length - 5) loadMore(getGridCols() * 2);
+    if (lbIndex >= items.length - 5) loadMore(getCols() * 2);
   }
 
   document.getElementById('lb-close').addEventListener('click', closeLightbox);
@@ -531,10 +653,9 @@
   });
 
   // ── Kick off ───────────────────────────────────────────────────────────────
-  // Initial load: exactly enough rows to fill the viewport plus several extra rows.
   (async () => {
+    masonryInit();
     await loadMore(calcBatch(3));
-    // Only start observing once the initial batch is in.
     io.observe(sentinel);
   })();
 })();
