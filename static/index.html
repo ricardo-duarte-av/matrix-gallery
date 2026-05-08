@@ -169,6 +169,30 @@
     text-overflow: ellipsis;
   }
 
+  .media-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 8px 6px;
+  }
+  .reaction-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(124,58,237,.18);
+    border: 1px solid rgba(124,58,237,.35);
+    border-radius: 12px;
+    padding: 1px 7px;
+    font-size: .78rem;
+    line-height: 1.4;
+    color: var(--text);
+    user-select: none;
+  }
+  .reaction-pill .reaction-count {
+    font-size: .68rem;
+    color: var(--muted);
+  }
+
   /* ── Infinite scroll sentinel & loader ── */
   #sentinel { height: 1px; }
 
@@ -505,6 +529,20 @@
       dateEl.className = 'media-date';
       dateEl.textContent = dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
       textWrap.appendChild(dateEl);
+    }
+
+    if (item.reactions && Object.keys(item.reactions).length > 0) {
+      const reactionsEl = document.createElement('div');
+      reactionsEl.className = 'media-reactions';
+      // Sort by count descending for consistent display
+      const sorted = Object.entries(item.reactions).sort((a, b) => b[1] - a[1]);
+      for (const [emoji, count] of sorted) {
+        const pill = document.createElement('span');
+        pill.className = 'reaction-pill';
+        pill.innerHTML = `${emoji}${count > 1 ? ` <span class="reaction-count">${count}</span>` : ''}`;
+        reactionsEl.appendChild(pill);
+      }
+      card.appendChild(reactionsEl);
     }
 
     const open = () => openLightbox(globalIndex);

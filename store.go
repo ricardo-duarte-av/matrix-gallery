@@ -12,12 +12,13 @@ import (
 // Store holds all fetched media items and manages incremental loading from Matrix.
 // Items are ordered newest-first, matching the backward-pagination order.
 type Store struct {
-	mu      sync.RWMutex
-	items   []MediaItem
-	cursor  string // Matrix pagination token for the next backward batch
-	sync    string // Matrix pagination token for the next forward batch
-	done    bool   // true when there are no more events to fetch
-	loading bool
+	mu        sync.RWMutex
+	items     []MediaItem
+	reactions map[string]map[string]int // eventID -> emoji -> count
+	cursor    string                    // Matrix pagination token for the next backward batch
+	sync      string                    // Matrix pagination token for the next forward batch
+	done      bool                      // true when there are no more events to fetch
+	loading   bool
 
 	fetcher  *MatrixFetcher
 	precache chan MediaItem
@@ -29,8 +30,9 @@ type ThumbPrecacher interface {
 
 func newStore(fetcher *MatrixFetcher, precacher ThumbPrecacher) *Store {
 	s := &Store{
-		fetcher:  fetcher,
-		precache: make(chan MediaItem, 500),
+		fetcher:   fetcher,
+		reactions: make(map[string]map[string]int),
+		precache:  make(chan MediaItem, 500),
 	}
 	if precacher != nil {
 		for i := 0; i < 5; i++ {
@@ -38,6 +40,27 @@ func newStore(fetcher *MatrixFetcher, precacher ThumbPrecacher) *Store {
 		}
 	}
 	return s
+}
+
+// mergeReactions merges newReactions into s.reactions and updates s.items in-place.
+// Must be called with s.mu held for writing.
+func (s *Store) mergeReactions(newReactions map[string]map[string]int) {
+	if len(newReactions) == 0 {
+		return
+	}
+	for targetID, emojis := range newReactions {
+		if s.reactions[targetID] == nil {
+			s.reactions[targetID] = make(map[string]int)
+		}
+		for emoji, count := range emojis {
+			s.reactions[targetID][emoji] += count
+		}
+	}
+	for i, item := range s.items {
+		if r, ok := s.reactions[item.EventID]; ok {
+			s.items[i].Reactions = r
+		}
+	}
 }
 
 func (s *Store) runPrecacheWorker(p ThumbPrecacher) {
@@ -99,7 +122,7 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 	s.mu.Unlock()
 
 	go func() {
-		items, nextCursor, _, err := s.fetcher.FetchBatch(ctx, cursor, 100)
+		items, newReactions, nextCursor, _, err := s.fetcher.FetchBatch(ctx, cursor, 100)
 
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -110,6 +133,13 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 			return
 		}
 
+		s.mergeReactions(newReactions)
+		// Apply accumulated reactions to newly fetched items before appending.
+		for i, item := range items {
+			if r, ok := s.reactions[item.EventID]; ok {
+				items[i].Reactions = r
+			}
+		}
 		s.items = append(s.items, items...)
 		sort.Slice(s.items, func(i, j int) bool {
 			return s.items[i].Timestamp > s.items[j].Timestamp
@@ -153,7 +183,7 @@ func (s *Store) SyncLoop(ctx context.Context) {
 			continue
 		}
 
-		items, nextSync, err := s.fetcher.SyncOnce(ctx, syncToken)
+		items, newReactions, nextSync, err := s.fetcher.SyncOnce(ctx, syncToken)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -167,8 +197,14 @@ func (s *Store) SyncLoop(ctx context.Context) {
 			continue
 		}
 
-		if len(items) > 0 {
+		if len(items) > 0 || len(newReactions) > 0 {
 			s.mu.Lock()
+			s.mergeReactions(newReactions)
+			for i, item := range items {
+				if r, ok := s.reactions[item.EventID]; ok {
+					items[i].Reactions = r
+				}
+			}
 			s.items = append(items, s.items...)
 			sort.Slice(s.items, func(i, j int) bool {
 				return s.items[i].Timestamp > s.items[j].Timestamp
