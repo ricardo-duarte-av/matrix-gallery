@@ -152,6 +152,9 @@ func (p *Proxy) ServeOriginal(w http.ResponseWriter, r *http.Request, server, me
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+p.accessToken)
+		if rng := r.Header.Get("Range"); rng != "" {
+			req.Header.Set("Range", rng)
+		}
 
 		resp, err := p.httpClient.Do(req)
 		if err != nil {
@@ -166,7 +169,7 @@ func (p *Proxy) ServeOriginal(w http.ResponseWriter, r *http.Request, server, me
 			continue
 		}
 
-		for _, h := range []string{"Content-Type", "Content-Length", "Content-Disposition"} {
+		for _, h := range []string{"Content-Type", "Content-Length", "Content-Disposition", "Content-Range", "Accept-Ranges"} {
 			if v := resp.Header.Get(h); v != "" {
 				w.Header().Set(h, v)
 			}

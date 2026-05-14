@@ -495,6 +495,35 @@
       badge.className = 'video-badge';
       badge.textContent = '▶ video';
       thumbWrap.appendChild(badge);
+
+      let hoverTimer = null;
+      let hoverVideo = null;
+      const thumb = thumbWrap.querySelector('img') || thumbWrap.querySelector('.media-placeholder');
+
+      card.addEventListener('mouseenter', () => {
+        hoverTimer = setTimeout(() => {
+          hoverVideo = document.createElement('video');
+          hoverVideo.src = item.original_url;
+          hoverVideo.muted = true;
+          hoverVideo.loop = true;
+          hoverVideo.playsInline = true;
+          hoverVideo.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:4px;';
+          thumbWrap.appendChild(hoverVideo);
+          hoverVideo.play();
+          if (thumb) thumb.style.visibility = 'hidden';
+        }, 500);
+      });
+
+      card.addEventListener('mouseleave', () => {
+        clearTimeout(hoverTimer);
+        hoverTimer = null;
+        if (hoverVideo) {
+          hoverVideo.pause();
+          hoverVideo.remove();
+          hoverVideo = null;
+          if (thumb) thumb.style.visibility = '';
+        }
+      });
     }
 
     const info = document.createElement('div');
