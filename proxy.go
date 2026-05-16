@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/disintegration/imaging"
@@ -139,11 +140,16 @@ func (p *Proxy) fetchThumbnail(ctx context.Context, server, mediaID string) ([]b
 // ServeOriginal proxies the original media from the Matrix server, streaming
 // the response without caching. Tries the authenticated v1 endpoint first,
 // then falls back to the legacy v3 path.
+//
+// If the upstream ignores a Range header and returns 200, this function
+// implements byte-range slicing itself so clients always get a proper 206.
 func (p *Proxy) ServeOriginal(w http.ResponseWriter, r *http.Request, server, mediaID string) {
 	urls := []string{
 		p.homeserver + "/_matrix/client/v1/media/download/" + server + "/" + mediaID,
 		p.homeserver + "/_matrix/media/v3/download/" + server + "/" + mediaID,
 	}
+
+	clientRange := r.Header.Get("Range")
 
 	for _, origURL := range urls {
 		req, err := http.NewRequestWithContext(r.Context(), "GET", origURL, nil)
@@ -152,8 +158,8 @@ func (p *Proxy) ServeOriginal(w http.ResponseWriter, r *http.Request, server, me
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+p.accessToken)
-		if rng := r.Header.Get("Range"); rng != "" {
-			req.Header.Set("Range", rng)
+		if clientRange != "" {
+			req.Header.Set("Range", clientRange)
 		}
 
 		resp, err := p.httpClient.Do(req)
@@ -163,24 +169,99 @@ func (p *Proxy) ServeOriginal(w http.ResponseWriter, r *http.Request, server, me
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-			// Drain body so the connection can be reused, then try next URL.
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			continue
 		}
 
-		for _, h := range []string{"Content-Type", "Content-Length", "Content-Disposition", "Content-Range", "Accept-Ranges"} {
+		for _, h := range []string{"Content-Type", "Content-Disposition"} {
 			if v := resp.Header.Get(h); v != "" {
 				w.Header().Set(h, v)
 			}
 		}
 		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Accept-Ranges", "bytes")
+
+		// Upstream honoured the range request — forward as-is.
+		if resp.StatusCode == http.StatusPartialContent {
+			for _, h := range []string{"Content-Length", "Content-Range"} {
+				if v := resp.Header.Get(h); v != "" {
+					w.Header().Set(h, v)
+				}
+			}
+			w.WriteHeader(http.StatusPartialContent)
+			io.Copy(w, resp.Body)
+			return
+		}
+
+		// Upstream returned the full file. If the client asked for a range,
+		// slice it here so callers always get 206 + limited bytes.
+		if clientRange != "" && resp.StatusCode == http.StatusOK {
+			totalSize, parseErr := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+			if parseErr == nil && totalSize > 0 {
+				if start, end, ok := parseByteRange(clientRange, totalSize); ok {
+					length := end - start + 1
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
+					w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+					w.WriteHeader(http.StatusPartialContent)
+					if start > 0 {
+						io.CopyN(io.Discard, resp.Body, start) //nolint:errcheck
+					}
+					io.CopyN(w, resp.Body, length) //nolint:errcheck
+					return
+				}
+			}
+		}
+
+		// Full-content fallback.
+		if v := resp.Header.Get("Content-Length"); v != "" {
+			w.Header().Set("Content-Length", v)
+		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 		return
 	}
 
 	http.Error(w, "media not found", http.StatusNotFound)
+}
+
+// parseByteRange parses a "bytes=start-end" or "bytes=start-" Range header
+// and returns clamped start/end positions. Returns false for unsupported forms.
+func parseByteRange(header string, total int64) (start, end int64, ok bool) {
+	if !strings.HasPrefix(header, "bytes=") {
+		return 0, 0, false
+	}
+	spec := strings.TrimPrefix(header, "bytes=")
+	// Only handle single ranges; multi-range (commas) is not worth the complexity.
+	if strings.Contains(spec, ",") {
+		return 0, 0, false
+	}
+	dash := strings.IndexByte(spec, '-')
+	if dash < 0 {
+		return 0, 0, false
+	}
+	startStr, endStr := spec[:dash], spec[dash+1:]
+
+	if startStr == "" {
+		// Suffix range "bytes=-N" — last N bytes; requires seeking, skip.
+		return 0, 0, false
+	}
+	start, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil || start < 0 || start >= total {
+		return 0, 0, false
+	}
+	if endStr == "" {
+		end = total - 1
+	} else {
+		end, err = strconv.ParseInt(endStr, 10, 64)
+		if err != nil || end < start {
+			return 0, 0, false
+		}
+		if end >= total {
+			end = total - 1
+		}
+	}
+	return start, end, true
 }
 
 func (p *Proxy) fetchAuthed(ctx context.Context, url string) ([]byte, string, error) {

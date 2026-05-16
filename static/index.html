@@ -503,13 +503,14 @@
       card.addEventListener('mouseenter', () => {
         hoverTimer = setTimeout(() => {
           hoverVideo = document.createElement('video');
-          hoverVideo.src = item.original_url;
           hoverVideo.muted = true;
           hoverVideo.loop = true;
           hoverVideo.playsInline = true;
+          hoverVideo.poster = item.thumbnail_url;
           hoverVideo.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:4px;';
+          hoverVideo.src = item.original_url;
           thumbWrap.appendChild(hoverVideo);
-          hoverVideo.play();
+          hoverVideo.play().catch(() => {});
           if (thumb) thumb.style.visibility = 'hidden';
         }, 500);
       });
@@ -519,6 +520,8 @@
         hoverTimer = null;
         if (hoverVideo) {
           hoverVideo.pause();
+          hoverVideo.src = '';
+          hoverVideo.load();
           hoverVideo.remove();
           hoverVideo = null;
           if (thumb) thumb.style.visibility = '';
