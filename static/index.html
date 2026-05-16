@@ -88,6 +88,27 @@
   .media-thumb-wrap img.loaded { opacity: 1; }
   .media-card:hover .media-thumb-wrap img { transform: scale(1.06); }
 
+  /* Hover video loading spinner */
+  .video-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .video-loading::after {
+    content: '';
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(255,255,255,.25);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* Video badge */
   .video-badge {
     position: absolute;
@@ -498,16 +519,24 @@
 
       let hoverTimer = null;
       let hoverVideo = null;
+      let hoverSpinner = null;
       const thumb = thumbWrap.querySelector('img') || thumbWrap.querySelector('.media-placeholder');
 
       card.addEventListener('mouseenter', () => {
         hoverTimer = setTimeout(() => {
+          hoverSpinner = document.createElement('div');
+          hoverSpinner.className = 'video-loading';
+          thumbWrap.appendChild(hoverSpinner);
+
           hoverVideo = document.createElement('video');
           hoverVideo.muted = true;
           hoverVideo.loop = true;
           hoverVideo.playsInline = true;
           hoverVideo.poster = item.thumbnail_url;
           hoverVideo.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:4px;';
+          hoverVideo.addEventListener('playing', () => {
+            if (hoverSpinner) { hoverSpinner.remove(); hoverSpinner = null; }
+          }, { once: true });
           hoverVideo.src = item.original_url;
           thumbWrap.appendChild(hoverVideo);
           hoverVideo.play().catch(() => {});
@@ -518,6 +547,7 @@
       card.addEventListener('mouseleave', () => {
         clearTimeout(hoverTimer);
         hoverTimer = null;
+        if (hoverSpinner) { hoverSpinner.remove(); hoverSpinner = null; }
         if (hoverVideo) {
           hoverVideo.pause();
           hoverVideo.src = '';
