@@ -1,0 +1,7 @@
+matrix-gallery
+# matrix-gallery
+./matrix.go:203:25: undefined: event.StateName
+./matrix.go:205:25: evt.Content.AsName undefined (type event.Content has no field or method AsName)
+./matrix.go:214:22: undefined: event.NameEventContent
+./matrix.go:215:50: undefined: event.StateName
+./store.go:5:2: "fmt" imported and not used

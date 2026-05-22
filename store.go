@@ -2,21 +2,23 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sort"
 	"sync"
 	"time"
+
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
-// Store holds all fetched media items and manages incremental loading from Matrix.
+// Store holds all fetched media items and manages incremental loading from Matrix for a specific room.
 // Items are ordered newest-first, matching the backward-pagination order.
 type Store struct {
+	roomID    id.RoomID
 	mu        sync.RWMutex
 	items     []MediaItem
 	reactions map[string]map[string]int // eventID -> emoji -> count
 	cursor    string                    // Matrix pagination token for the next backward batch
-	sync      string                    // Matrix pagination token for the next forward batch
 	done      bool                      // true when there are no more events to fetch
 	loading   bool
 
@@ -28,8 +30,9 @@ type ThumbPrecacher interface {
 	Precache(server, mediaID string)
 }
 
-func newStore(fetcher *MatrixFetcher, precacher ThumbPrecacher) *Store {
+func newStore(fetcher *MatrixFetcher, precacher ThumbPrecacher, roomID id.RoomID) *Store {
 	s := &Store{
+		roomID:    roomID,
 		fetcher:   fetcher,
 		reactions: make(map[string]map[string]int),
 		precache:  make(chan MediaItem, 500),
@@ -122,14 +125,14 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 	s.mu.Unlock()
 
 	go func() {
-		items, newReactions, nextCursor, _, err := s.fetcher.FetchBatch(ctx, cursor, 100)
+		items, newReactions, nextCursor, _, err := s.fetcher.FetchBatch(ctx, s.roomID, cursor, 100)
 
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.loading = false
 
 		if err != nil {
-			log.Printf("Error fetching batch from Matrix: %v", err)
+			log.Printf("Error fetching batch from Matrix for %s: %v", s.roomID, err)
 			return
 		}
 
@@ -145,111 +148,148 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 			return s.items[i].Timestamp > s.items[j].Timestamp
 		})
 
-		if nextCursor == "" || len(items) == 0 {
+		if nextCursor == "" {
 			s.done = true
 		} else {
 			s.cursor = nextCursor
-			for _, item := range items {
-				select {
-				case s.precache <- item:
-				default:
-					// queue full, skip
+			if len(items) > 0 {
+				for _, item := range items {
+					select {
+					case s.precache <- item:
+					default:
+						// queue full, skip
+					}
 				}
 			}
 		}
-		log.Printf("Fetched %d media items (total: %d, exhausted: %v)", len(items), len(s.items), s.done)
+		log.Printf("[%s] Fetched %d media items (total: %d, exhausted: %v)", s.roomID, len(items), len(s.items), s.done)
 	}()
 }
 
-// SyncLoop runs a continuous long-poll connection to Matrix /sync.
-// It blocks until ctx is cancelled or an unrecoverable error occurs.
-func (s *Store) SyncLoop(ctx context.Context) {
+// InjectEvents handles new events from a global sync.
+func (s *Store) InjectEvents(ctx context.Context, events []*event.Event) {
+	var items []MediaItem
+	reactions := make(map[string]map[string]int)
+
+	for _, evt := range events {
+		if evt.Type == event.EventReaction {
+			if err := evt.Content.ParseRaw(evt.Type); err != nil {
+				continue
+			}
+			r := evt.Content.AsReaction()
+			rel := r.RelatesTo
+			if rel.Type == event.RelAnnotation && rel.EventID != "" && rel.Key != "" {
+				targetID := rel.EventID.String()
+				if reactions[targetID] == nil {
+					reactions[targetID] = make(map[string]int)
+				}
+				reactions[targetID][rel.Key]++
+			}
+			continue
+		}
+		if evt.Type != event.EventMessage && evt.Type != event.EventSticker {
+			continue
+		}
+		if err := evt.Content.ParseRaw(evt.Type); err != nil {
+			continue
+		}
+		msg := evt.Content.AsMessage()
+		item, ok := extractMediaItem(evt, msg)
+		if !ok {
+			continue
+		}
+		m := s.fetcher.getMember(ctx, s.roomID, evt.Sender)
+		item.DisplayName = m.DisplayName
+		item.SenderAvatarURL = m.AvatarURL
+		items = append(items, item)
+	}
+
+	if len(items) > 0 || len(reactions) > 0 {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.mergeReactions(reactions)
+		for i, item := range items {
+			if r, ok := s.reactions[item.EventID]; ok {
+				items[i].Reactions = r
+			}
+		}
+		s.items = append(items, s.items...)
+		sort.Slice(s.items, func(i, j int) bool {
+			return s.items[i].Timestamp > s.items[j].Timestamp
+		})
+
+		log.Printf("[%s] Sync found %d new media items (total: %d)", s.roomID, len(items), len(s.items))
+		for _, item := range items {
+			select {
+			case s.precache <- item:
+			default:
+			}
+		}
+	}
+}
+
+type StoreManager struct {
+	mu        sync.RWMutex
+	stores    map[id.RoomID]*Store
+	fetcher   *MatrixFetcher
+	precacher ThumbPrecacher
+	syncToken string
+}
+
+func NewStoreManager(fetcher *MatrixFetcher, precacher ThumbPrecacher) *StoreManager {
+	return &StoreManager{
+		stores:    make(map[id.RoomID]*Store),
+		fetcher:   fetcher,
+		precacher: precacher,
+	}
+}
+
+func (m *StoreManager) GetStore(roomID id.RoomID) *Store {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.stores[roomID]; ok {
+		return s
+	}
+	s := newStore(m.fetcher, m.precacher, roomID)
+	m.stores[roomID] = s
+	return s
+}
+
+func (m *StoreManager) SyncLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Sync loop stopped")
 			return
 		default:
 		}
 
-		syncToken, err := s.ensureSyncToken(ctx)
-		if err != nil {
-			log.Printf("Sync error: %v, retrying in 5s", err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
-				return
+		if m.syncToken == "" {
+			tok, err := m.fetcher.GetNowToken(ctx)
+			if err != nil {
+				log.Printf("Sync error (get token): %v, retrying in 5s", err)
+				time.Sleep(5 * time.Second)
+				continue
 			}
-			continue
+			m.syncToken = tok
 		}
 
-		items, newReactions, nextSync, err := s.fetcher.SyncOnce(ctx, syncToken)
+		resp, err := m.fetcher.client.SyncRequest(ctx, 30000, m.syncToken, "", false, "")
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			log.Printf("Sync error: %v, retrying in 5s", err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
-				return
-			}
+			time.Sleep(5 * time.Second)
 			continue
 		}
+		m.syncToken = resp.NextBatch
 
-		if len(items) > 0 || len(newReactions) > 0 {
-			s.mu.Lock()
-			s.mergeReactions(newReactions)
-			for i, item := range items {
-				if r, ok := s.reactions[item.EventID]; ok {
-					items[i].Reactions = r
-				}
+		m.mu.RLock()
+		for roomID, joinedRoom := range resp.Rooms.Join {
+			if s, ok := m.stores[roomID]; ok {
+				s.InjectEvents(ctx, joinedRoom.Timeline.Events)
 			}
-			s.items = append(items, s.items...)
-			sort.Slice(s.items, func(i, j int) bool {
-				return s.items[i].Timestamp > s.items[j].Timestamp
-			})
-			s.sync = nextSync
-			s.mu.Unlock()
-
-			log.Printf("Sync found %d new media items (total: %d)", len(items), len(s.items))
-			for _, item := range items {
-				select {
-				case s.precache <- item:
-				default:
-				}
-			}
-		} else if nextSync != "" {
-			s.mu.Lock()
-			s.sync = nextSync
-			s.mu.Unlock()
 		}
+		m.mu.RUnlock()
 	}
-}
-
-func (s *Store) ensureSyncToken(ctx context.Context) (string, error) {
-	s.mu.RLock()
-	token := s.sync
-	s.mu.RUnlock()
-
-	if token != "" {
-		return token, nil
-	}
-
-	now, err := s.fetcher.GetNowToken(ctx)
-	if err != nil {
-		return "", err
-	}
-	if now == "" {
-		return "", fmt.Errorf("empty sync token from server")
-	}
-
-	s.mu.Lock()
-	if s.sync == "" {
-		s.sync = now
-	}
-	token = s.sync
-	s.mu.Unlock()
-
-	return token, nil
 }

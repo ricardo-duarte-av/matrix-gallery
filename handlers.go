@@ -6,18 +6,37 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"maunium.net/go/mautrix/id"
 )
 
 type Handler struct {
-	store *Store
-	proxy *Proxy
+	manager *StoreManager
+	proxy   *Proxy
 }
 
-func newHandler(store *Store, proxy *Proxy) *Handler {
-	return &Handler{store: store, proxy: proxy}
+func newHandler(manager *StoreManager, proxy *Proxy) *Handler {
+	return &Handler{manager: manager, proxy: proxy}
+}
+
+func (h *Handler) handleAPIRooms(w http.ResponseWriter, r *http.Request) {
+	rooms, err := h.manager.fetcher.GetJoinedRooms(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rooms)
 }
 
 func (h *Handler) handleAPIMedia(w http.ResponseWriter, r *http.Request) {
+	roomID := id.RoomID(r.URL.Query().Get("room_id"))
+	if roomID == "" {
+		http.Error(w, "missing room_id", http.StatusBadRequest)
+		return
+	}
+
 	offset := queryInt(r, "offset", 0)
 	limit := queryInt(r, "limit", 50)
 	if limit > 250 {
@@ -27,18 +46,20 @@ func (h *Handler) handleAPIMedia(w http.ResponseWriter, r *http.Request) {
 		limit = 1
 	}
 
-	if h.store.NeedsMore(offset, limit) {
-		h.store.TriggerLoad(context.Background())
+	store := h.manager.GetStore(roomID)
+
+	if store.NeedsMore(offset, limit) {
+		store.TriggerLoad(context.Background())
 	}
 
-	items, hasMore, total := h.store.GetPage(offset, limit)
+	items, hasMore, total := store.GetPage(offset, limit)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]any{
 		"items":    items,
 		"has_more": hasMore,
-		"loading":  h.store.IsLoading(),
+		"loading":  store.IsLoading(),
 		"total":    total,
 		"offset":   offset,
 	})

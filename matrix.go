@@ -35,9 +35,13 @@ type memberInfo struct {
 	AvatarURL   string // proxy URL, empty if none
 }
 
+type RoomInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
 type MatrixFetcher struct {
 	client      *mautrix.Client
-	roomID      id.RoomID
 	memberCache sync.Map // map[string]memberInfo
 }
 
@@ -48,19 +52,18 @@ func newMatrixFetcher(cfg *Config) (*MatrixFetcher, error) {
 	}
 	return &MatrixFetcher{
 		client: client,
-		roomID: id.RoomID(cfg.RoomID),
 	}, nil
 }
 
 // getMember returns cached or freshly fetched display name and avatar for a user.
-func (f *MatrixFetcher) getMember(ctx context.Context, userID id.UserID) memberInfo {
+func (f *MatrixFetcher) getMember(ctx context.Context, roomID id.RoomID, userID id.UserID) memberInfo {
 	key := userID.String()
 	if v, ok := f.memberCache.Load(key); ok {
 		return v.(memberInfo)
 	}
 
 	var content event.MemberEventContent
-	err := f.client.StateEvent(ctx, f.roomID, event.StateMember, key, &content)
+	err := f.client.StateEvent(ctx, roomID, event.StateMember, key, &content)
 
 	info := memberInfo{DisplayName: content.Displayname}
 	if err == nil && content.AvatarURL != "" {
@@ -78,8 +81,8 @@ func (f *MatrixFetcher) getMember(ctx context.Context, userID id.UserID) memberI
 // Pass an empty fromToken to start from the latest events in the room.
 // Returns the media items found, a reactions map (target event ID -> emoji -> count),
 // the next backward token, and the forward token (only on first call).
-func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit int) ([]MediaItem, map[string]map[string]int, string, string, error) {
-	resp, err := f.client.Messages(ctx, f.roomID, fromToken, "", mautrix.DirectionBackward, nil, limit)
+func (f *MatrixFetcher) FetchBatch(ctx context.Context, roomID id.RoomID, fromToken string, limit int) ([]MediaItem, map[string]map[string]int, string, string, error) {
+	resp, err := f.client.Messages(ctx, roomID, fromToken, "", mautrix.DirectionBackward, nil, limit)
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("fetching messages: %w", err)
 	}
@@ -113,7 +116,7 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit 
 		if !ok {
 			continue
 		}
-		m := f.getMember(ctx, evt.Sender)
+		m := f.getMember(ctx, roomID, evt.Sender)
 		item.DisplayName = m.DisplayName
 		item.SenderAvatarURL = m.AvatarURL
 		items = append(items, item)
@@ -124,7 +127,7 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, fromToken string, limit 
 
 // SyncOnce performs a single long-poll sync from the given token.
 // The server holds the connection until new events arrive or timeout elapses.
-func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string) ([]MediaItem, map[string]map[string]int, string, error) {
+func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string, roomID id.RoomID) ([]MediaItem, map[string]map[string]int, string, error) {
 	// 30 seconds is the Matrix-recommended long-poll timeout
 	resp, err := f.client.SyncRequest(ctx, 30000, since, "", false, "")
 	if err != nil {
@@ -133,7 +136,7 @@ func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string) ([]MediaItem
 
 	var items []MediaItem
 	reactions := make(map[string]map[string]int)
-	room, ok := resp.Rooms.Join[f.roomID]
+	room, ok := resp.Rooms.Join[roomID]
 	if ok {
 		for _, evt := range room.Timeline.Events {
 			if evt.Type == event.EventReaction {
@@ -166,7 +169,7 @@ func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string) ([]MediaItem
 			if !ok {
 				continue
 			}
-			m := f.getMember(ctx, evt.Sender)
+			m := f.getMember(ctx, roomID, evt.Sender)
 			item.DisplayName = m.DisplayName
 			item.SenderAvatarURL = m.AvatarURL
 			items = append(items, item)
@@ -183,6 +186,55 @@ func (f *MatrixFetcher) GetNowToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return resp.NextBatch, nil
+}
+
+// GetJoinedRooms retrieves all rooms joined by the user and their display names.
+func (f *MatrixFetcher) GetJoinedRooms(ctx context.Context) ([]RoomInfo, error) {
+	resp, err := f.client.SyncRequest(ctx, 0, "", "", false, "")
+	if err != nil {
+		return nil, err
+	}
+
+	var rooms []RoomInfo
+	for roomID, joinedRoom := range resp.Rooms.Join {
+		name := string(roomID)
+		isSpace := false
+		
+		// Determine name and filter out spaces
+		for _, evt := range joinedRoom.State.Events {
+			if evt.Type == event.StateRoomName {
+				if err := evt.Content.ParseRaw(evt.Type); err == nil {
+					name = evt.Content.AsRoomName().Name
+				}
+			} else if evt.Type == event.StateCreate {
+				if err := evt.Content.ParseRaw(evt.Type); err == nil {
+					if evt.Content.AsCreate().Type == event.RoomTypeSpace {
+						isSpace = true
+					}
+				}
+			}
+		}
+		
+		if isSpace {
+			continue
+		}
+		// If no name found, we could try to fetch it via separate state request if needed,
+		// but sync usually provides it if it changed recently or if we use certain filters.
+		// For now, let's keep it simple or try a fallback fetch.
+		if name == string(roomID) {
+			var content event.RoomNameEventContent
+			err := f.client.StateEvent(ctx, roomID, event.StateRoomName, "", &content)
+			if err == nil && content.Name != "" {
+				name = content.Name
+			}
+		}
+
+		rooms = append(rooms, RoomInfo{
+			ID:          roomID.String(),
+			DisplayName: name,
+		})
+	}
+	return rooms, nil
 }
 
 func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaItem, bool) {

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 )
 
 //go:embed static
@@ -29,12 +30,8 @@ func main() {
 	}
 	log.Println("Proxy initialized")
 
-	store := newStore(fetcher, proxy)
-	h := newHandler(store, proxy)
-
-	log.Println("Starting initial media fetch...")
-	// Kick off the first batch fetch so media is ready quickly.
-	store.TriggerLoad(context.Background())
+	manager := NewStoreManager(fetcher, proxy)
+	h := newHandler(manager, proxy)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -43,14 +40,23 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/media", h.handleAPIMedia)
+	mux.HandleFunc("GET /api/rooms", h.handleAPIRooms)
 	mux.HandleFunc("/media/thumb/", h.handleThumb)
 	mux.HandleFunc("/media/original/", h.handleOriginal)
-	mux.Handle("/", noCacheHTML(http.FileServer(http.FS(staticFS))))
+
+	fileServer := http.FileServer(http.FS(staticFS))
+	mux.Handle("/", noCacheHTML(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// If the path starts with /room/ or is exactly /, serve the SPA (index.html)
+		if strings.HasPrefix(r.URL.Path, "/room/") {
+			r.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r)
+	})))
 
 	log.Printf("Gallery server listening on http://%s", cfg.ListenAddr())
 
 	// Continuous long-poll sync for new items.
-	go store.SyncLoop(context.Background())
+	go manager.SyncLoop(context.Background())
 
 	if err := http.ListenAndServe(cfg.ListenAddr(), mux); err != nil {
 		log.Fatalf("Server: %v", err)

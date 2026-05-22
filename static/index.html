@@ -35,10 +35,35 @@
     padding: 12px 16px;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     border-bottom: 1px solid #222;
   }
-  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .02em; }
+  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+
+  #room-selector-wrap {
+    display: flex;
+    align-items: center;
+    background: #2a2a2a;
+    border-radius: 6px;
+    padding: 0 8px;
+    border: 1px solid #333;
+    transition: border-color .2s;
+  }
+  #room-selector-wrap:hover { border-color: var(--accent); }
+
+  #room-selector {
+    background: none;
+    border: none;
+    color: var(--text);
+    padding: 6px 4px;
+    font-size: .85rem;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    max-width: 300px;
+  }
+  #room-selector option { background: var(--surface); color: var(--text); }
+
   #status {
     margin-left: auto;
     font-size: .8rem;
@@ -338,6 +363,13 @@
     <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
   </svg>
   <h1>Room Gallery</h1>
+
+  <div id="room-selector-wrap">
+    <select id="room-selector" aria-label="Select Room">
+      <option value="" disabled selected>Loading rooms...</option>
+    </select>
+  </div>
+
   <span id="status"></span>
 </header>
 
@@ -367,6 +399,7 @@
 <script>
 (() => {
   // ── State ──────────────────────────────────────────────────────────────────
+  let currentRoomID = '';
   let offset = 0;
   let fetching = false;
   let exhausted = false;
@@ -396,11 +429,7 @@
   }
 
   // Place a single card in the shortest column.
-  // Pass commit=true when appending a brand-new card so we don't reset state.
   function placeCard(card, commit) {
-    if (commit) {
-      // Reset only when appending incrementally
-    }
     const col = mColH.indexOf(Math.min(...mColH));
     card.style.left = col * (COL_WIDTH + GAP) + 'px';
     card.style.top  = mColH[col] + 'px';
@@ -419,7 +448,6 @@
     }, 60);
   }
 
-  // Append new cards to the gallery and place them into the masonry grid.
   function appendCards(newCards) {
     newCards.forEach(card => {
       card.style.width = COL_WIDTH + 'px';
@@ -429,24 +457,17 @@
     syncGalleryHeight();
   }
 
-  // ── Batch size helpers ─────────────────────────────────────────────────────
-  function getCols() { return mCols; }
-
-  function calcBatch(extraRows) {
-    const rowsFit = Math.ceil(window.innerHeight / COL_WIDTH);
-    return Math.min(250, mCols * (rowsFit + extraRows));
-  }
-
   // ── DOM refs ───────────────────────────────────────────────────────────────
-  const gallery   = document.getElementById('gallery');
-  const loader    = document.getElementById('loader');
-  const status    = document.getElementById('status');
-  const empty     = document.getElementById('empty');
-  const lb        = document.getElementById('lightbox');
-  const lbContent = document.getElementById('lb-content');
-  const lbMeta    = document.getElementById('lb-meta');
-  const lbPrev    = document.getElementById('lb-prev');
-  const lbNext    = document.getElementById('lb-next');
+  const gallery      = document.getElementById('gallery');
+  const loader       = document.getElementById('loader');
+  const status       = document.getElementById('status');
+  const empty        = document.getElementById('empty');
+  const lb           = document.getElementById('lightbox');
+  const lbContent    = document.getElementById('lb-content');
+  const lbMeta       = document.getElementById('lb-meta');
+  const lbPrev       = document.getElementById('lb-prev');
+  const lbNext       = document.getElementById('lb-next');
+  const roomSelector = document.getElementById('room-selector');
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const iconVideo = `<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40">
@@ -461,9 +482,7 @@
     status.textContent = items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : '';
   }
 
-  // ── Sender helpers ─────────────────────────────────────────────────────────
   function localpart(mxid) {
-    // "@user:server" → "user"
     if (!mxid) return '?';
     const colon = mxid.indexOf(':');
     return mxid.slice(1, colon > 0 ? colon : undefined) || mxid;
@@ -476,7 +495,6 @@
     return div;
   }
 
-  // ── Render a single card ───────────────────────────────────────────────────
   function buildCard(item, globalIndex) {
     const card = document.createElement('div');
     card.className = 'media-card';
@@ -486,12 +504,10 @@
 
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'media-thumb-wrap';
-    // Pre-size the thumb container from known dimensions so the masonry
-    // measures the correct card height immediately, before any image loads.
     if (item.width && item.height) {
       thumbWrap.style.height = Math.round(COL_WIDTH * item.height / item.width) + 'px';
     } else {
-      thumbWrap.style.height = '180px'; // sensible fallback
+      thumbWrap.style.height = '180px';
     }
     card.appendChild(thumbWrap);
 
@@ -563,7 +579,6 @@
     info.className = 'media-info';
     card.appendChild(info);
 
-    // Avatar: real image or fallback initial
     const displayName = item.display_name || localpart(item.sender);
     if (item.sender_avatar_url) {
       const av = document.createElement('img');
@@ -596,7 +611,6 @@
     if (item.reactions && Object.keys(item.reactions).length > 0) {
       const reactionsEl = document.createElement('div');
       reactionsEl.className = 'media-reactions';
-      // Sort by count descending for consistent display
       const sorted = Object.entries(item.reactions).sort((a, b) => b[1] - a[1]);
       for (const [emoji, count] of sorted) {
         const pill = document.createElement('span');
@@ -623,7 +637,7 @@
 
   // ── Fetch & append ─────────────────────────────────────────────────────────
   async function loadMore(limit) {
-    if (fetching || exhausted) return;
+    if (!currentRoomID || fetching || exhausted) return;
     fetching = true;
     loader.classList.add('visible');
 
@@ -631,7 +645,7 @@
     let serverLoading = false;
 
     try {
-      const res = await fetch(`/api/media?offset=${offset}&limit=${limit}`);
+      const res = await fetch(`/api/media?room_id=${encodeURIComponent(currentRoomID)}&offset=${offset}&limit=${limit}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -639,10 +653,10 @@
       serverLoading = !!data.loading;
 
       const newItemsFiltered = newItems.filter(ni => !items.some(i => i.event_id === ni.event_id));
+      
       if (newItemsFiltered.length === 0 && newItems.length > 0 && !exhausted) {
         offset += newItems.length;
-        setTimeout(() => loadMore(limit), 0);
-        return;
+        return; // Finally block will re-trigger
       }
 
       const startIndex = items.length;
@@ -661,10 +675,8 @@
 
       if (items.length === 0 && !data.has_more && !data.loading) {
         empty.classList.add('visible');
-      }
-
-      if (newItems.length === 0 && serverLoading) {
-        setTimeout(() => loadMore(limit), 1200);
+      } else {
+        empty.classList.remove('visible');
       }
     } catch (e) {
       console.error('Failed to load media:', e);
@@ -675,22 +687,85 @@
         loader.classList.toggle('visible', items.length === 0);
       } else {
         loader.classList.remove('visible');
+        if (items.length < 200 || sentinel.getBoundingClientRect().top <= window.innerHeight + 1500) {
+          setTimeout(() => loadMore(mCols * 4), 150);
+        }
       }
     }
+  }
 
-    if (!exhausted && newItems.length > 0 &&
-        sentinel.getBoundingClientRect().top <= window.innerHeight + 1000) {
-      loadMore(getCols() * 4);
+  // ── Room Management ────────────────────────────────────────────────────────
+  async function initRooms() {
+    try {
+      const res = await fetch('/api/rooms');
+      const rooms = await res.json();
+      roomSelector.innerHTML = '';
+      rooms.sort((a,b) => a.display_name.localeCompare(b.display_name));
+      rooms.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = r.display_name;
+        roomSelector.appendChild(opt);
+      });
+
+      const match = window.location.pathname.match(/\/room\/(![^/]+)/);
+      if (match && rooms.some(r => r.id === match[1])) {
+        switchRoom(match[1], false);
+      } else {
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select a room...';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        roomSelector.insertBefore(placeholder, roomSelector.firstChild);
+        roomSelector.value = '';
+        loader.classList.remove('visible');
+      }
+    } catch (e) {
+      console.error('Failed to load rooms:', e);
+      roomSelector.innerHTML = '<option disabled>Error loading rooms</option>';
     }
   }
+
+  function switchRoom(roomID, updateHistory) {
+    if (currentRoomID === roomID) return;
+    currentRoomID = roomID;
+    roomSelector.value = roomID;
+    
+    offset = 0;
+    items = [];
+    exhausted = false;
+    fetching = false;
+    gallery.innerHTML = '';
+    masonryInit();
+    empty.classList.remove('visible');
+    loader.innerHTML = '<span class="spinner"></span>Loading…';
+    loader.classList.remove('visible');
+    
+    if (updateHistory) {
+      window.history.pushState({ roomID }, '', `/room/${roomID}`);
+    }
+    
+    loadMore(Math.ceil(window.innerHeight / 240) * Math.max(1, Math.floor((gallery.clientWidth || window.innerWidth) / 240)));
+  }
+
+  roomSelector.addEventListener('change', () => {
+    switchRoom(roomSelector.value, true);
+  });
+
+  window.addEventListener('popstate', (e) => {
+    const match = window.location.pathname.match(/\/room\/(![^/]+)/);
+    if (match) {
+      switchRoom(match[1], false);
+    }
+  });
 
   // ── Infinite scroll via IntersectionObserver ───────────────────────────────
   const sentinel = document.getElementById('sentinel');
   const io = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) loadMore(getCols() * 4);
+    if (entries[0].isIntersecting) loadMore(Math.max(1, Math.floor((gallery.clientWidth || window.innerWidth) / 240)) * 4);
   }, { rootMargin: '600px' });
 
-  // ── Window resize ──────────────────────────────────────────────────────────
   window.addEventListener('resize', scheduleRelayout);
 
   // ── Lightbox ───────────────────────────────────────────────────────────────
@@ -734,7 +809,7 @@
     lbPrev.disabled = lbIndex <= 0;
     lbNext.disabled = lbIndex >= items.length - 1;
 
-    if (lbIndex >= items.length - 5) loadMore(getCols() * 2);
+    if (lbIndex >= items.length - 5) loadMore(Math.max(1, Math.floor((gallery.clientWidth || window.innerWidth) / 240)) * 2);
   }
 
   document.getElementById('lb-close').addEventListener('click', closeLightbox);
@@ -755,7 +830,7 @@
   // ── Kick off ───────────────────────────────────────────────────────────────
   (async () => {
     masonryInit();
-    await loadMore(calcBatch(3));
+    await initRooms();
     io.observe(sentinel);
   })();
 })();

@@ -40,8 +40,5 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.AccessToken == "" {
 		return nil, fmt.Errorf("access_token is required")
 	}
-	if cfg.RoomID == "" {
-		return nil, fmt.Errorf("room_id is required")
-	}
 	return cfg, nil
 }
