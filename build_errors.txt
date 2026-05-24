@@ -1,3 +1,0 @@
-matrix-gallery
-# matrix-gallery
-./matrix.go:110:5: undefined: log
