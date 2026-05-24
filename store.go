@@ -125,7 +125,7 @@ func (s *Store) TriggerLoad(ctx context.Context) {
 	s.mu.Unlock()
 
 	go func() {
-		items, newReactions, nextCursor, _, err := s.fetcher.FetchBatch(ctx, s.roomID, cursor, 100)
+		items, newReactions, nextCursor, _, err := s.fetcher.FetchBatch(ctx, s.roomID, cursor, 500)
 
 		s.mu.Lock()
 		defer s.mu.Unlock()

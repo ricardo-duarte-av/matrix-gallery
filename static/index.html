@@ -695,8 +695,14 @@
   }
 
   // ── Room Management ────────────────────────────────────────────────────────
+  let lockedRoom = '';
+
   async function initRooms() {
     try {
+      const cfgRes = await fetch('/api/config');
+      const cfg = await cfgRes.json();
+      lockedRoom = cfg.locked_room || '';
+
       const res = await fetch('/api/rooms');
       const rooms = await res.json();
       roomSelector.innerHTML = '';
@@ -707,6 +713,13 @@
         opt.textContent = r.display_name;
         roomSelector.appendChild(opt);
       });
+
+      if (lockedRoom) {
+        const wrap = document.getElementById('room-selector-wrap');
+        if (wrap) wrap.style.display = 'none';
+        switchRoom(lockedRoom, false);
+        return;
+      }
 
       const match = window.location.pathname.match(/\/room\/(![^/]+)/);
       if (match && rooms.some(r => r.id === match[1])) {

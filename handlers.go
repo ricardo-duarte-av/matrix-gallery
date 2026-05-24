@@ -11,12 +11,20 @@ import (
 )
 
 type Handler struct {
-	manager *StoreManager
-	proxy   *Proxy
+	manager    *StoreManager
+	proxy      *Proxy
+	lockedRoom id.RoomID
 }
 
-func newHandler(manager *StoreManager, proxy *Proxy) *Handler {
-	return &Handler{manager: manager, proxy: proxy}
+func newHandler(manager *StoreManager, proxy *Proxy, lockedRoom id.RoomID) *Handler {
+	return &Handler{manager: manager, proxy: proxy, lockedRoom: lockedRoom}
+}
+
+func (h *Handler) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"locked_room": string(h.lockedRoom),
+	})
 }
 
 func (h *Handler) handleAPIRooms(w http.ResponseWriter, r *http.Request) {
@@ -24,6 +32,20 @@ func (h *Handler) handleAPIRooms(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if h.lockedRoom != "" {
+		filtered := rooms[:0]
+		for _, room := range rooms {
+			if id.RoomID(room.ID) == h.lockedRoom {
+				filtered = append(filtered, room)
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			filtered = append(filtered, RoomInfo{ID: string(h.lockedRoom), DisplayName: string(h.lockedRoom)})
+		}
+		rooms = filtered
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -34,6 +56,10 @@ func (h *Handler) handleAPIMedia(w http.ResponseWriter, r *http.Request) {
 	roomID := id.RoomID(r.URL.Query().Get("room_id"))
 	if roomID == "" {
 		http.Error(w, "missing room_id", http.StatusBadRequest)
+		return
+	}
+	if h.lockedRoom != "" && roomID != h.lockedRoom {
+		http.Error(w, "room is locked by server configuration", http.StatusForbidden)
 		return
 	}
 

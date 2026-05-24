@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"maunium.net/go/mautrix/id"
 )
 
 //go:embed static
@@ -31,7 +33,10 @@ func main() {
 	log.Println("Proxy initialized")
 
 	manager := NewStoreManager(fetcher, proxy)
-	h := newHandler(manager, proxy)
+	h := newHandler(manager, proxy, id.RoomID(cfg.RoomID))
+	if cfg.RoomID != "" {
+		log.Printf("Room lock enabled: serving only %s", cfg.RoomID)
+	}
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -41,6 +46,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/media", h.handleAPIMedia)
 	mux.HandleFunc("GET /api/rooms", h.handleAPIRooms)
+	mux.HandleFunc("GET /api/config", h.handleAPIConfig)
 	mux.HandleFunc("/media/thumb/", h.handleThumb)
 	mux.HandleFunc("/media/original/", h.handleOriginal)
 

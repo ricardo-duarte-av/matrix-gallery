@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	"maunium.net/go/mautrix"
@@ -106,14 +107,23 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, roomID id.RoomID, fromTo
 			continue
 		}
 		if evt.Type != event.EventMessage && evt.Type != event.EventSticker {
+			if evt.Type == event.EventEncrypted {
+				log.Printf("[%s] Found encrypted event - gallery does not support E2EE yet", roomID)
+			}
 			continue
 		}
 		if err := evt.Content.ParseRaw(evt.Type); err != nil {
 			continue
 		}
 		msg := evt.Content.AsMessage()
+		
+		if msg.MsgType == event.MsgImage || msg.MsgType == event.MsgVideo || msg.MsgType == event.MsgFile {
+			log.Printf("DEBUG: Found media message msgtype=%q, url=%q, file=%v", msg.MsgType, msg.URL, msg.File != nil)
+		}
+
 		item, ok := extractMediaItem(evt, msg)
 		if !ok {
+			log.Printf("DEBUG: extractMediaItem returned false for evt ID %s", evt.ID)
 			continue
 		}
 		m := f.getMember(ctx, roomID, evt.Sender)

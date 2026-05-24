@@ -7,8 +7,11 @@ homeserver: "https://matrix.example.com"
 # Access token from your Matrix client (Settings → Help & About → Access Token)
 access_token: "syt_your_access_token_here"
 
-# Room ID to generate the gallery from (e.g. !abc123:matrix.example.com)
-room_id: "!roomid:matrix.example.com"
+# Optional: lock the gallery to a single room. When set, the room selector is
+# hidden in the UI and only this room's media can be served. Leave empty (or
+# omit) to allow browsing every joined room via the dropdown.
+# room_id: "!roomid:matrix.example.com"
+room_id: ""
 
 # HTTP listen address and port
 listen_address: "0.0.0.0"
