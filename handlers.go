@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -28,27 +29,23 @@ func (h *Handler) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAPIRooms(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if h.lockedRoom != "" {
+		name := string(h.lockedRoom)
+		var content event.RoomNameEventContent
+		if err := h.manager.fetcher.client.StateEvent(r.Context(), h.lockedRoom, event.StateRoomName, "", &content); err == nil && content.Name != "" {
+			name = content.Name
+		}
+		json.NewEncoder(w).Encode([]RoomInfo{{ID: string(h.lockedRoom), DisplayName: name}})
+		return
+	}
+
 	rooms, err := h.manager.fetcher.GetJoinedRooms(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	if h.lockedRoom != "" {
-		filtered := rooms[:0]
-		for _, room := range rooms {
-			if id.RoomID(room.ID) == h.lockedRoom {
-				filtered = append(filtered, room)
-				break
-			}
-		}
-		if len(filtered) == 0 {
-			filtered = append(filtered, RoomInfo{ID: string(h.lockedRoom), DisplayName: string(h.lockedRoom)})
-		}
-		rooms = filtered
-	}
-
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rooms)
 }
 
