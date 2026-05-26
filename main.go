@@ -33,7 +33,7 @@ func main() {
 	log.Println("Proxy initialized")
 
 	manager := NewStoreManager(fetcher, proxy)
-	h := newHandler(manager, proxy, id.RoomID(cfg.RoomID))
+	h := newHandler(manager, proxy, id.RoomID(cfg.RoomID), cfg.MediaSecret)
 	if cfg.RoomID != "" {
 		log.Printf("Room lock enabled: serving only %s", cfg.RoomID)
 	}
@@ -47,8 +47,7 @@ func main() {
 	mux.HandleFunc("GET /api/media", h.handleAPIMedia)
 	mux.HandleFunc("GET /api/rooms", h.handleAPIRooms)
 	mux.HandleFunc("GET /api/config", h.handleAPIConfig)
-	mux.HandleFunc("/media/thumb/", h.handleThumb)
-	mux.HandleFunc("/media/original/", h.handleOriginal)
+	mux.HandleFunc("/media/", h.handleMedia)
 
 	fileServer := http.FileServer(http.FS(staticFS))
 	mux.Handle("/", noCacheHTML(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

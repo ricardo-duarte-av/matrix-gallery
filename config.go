@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Homeserver    string `yaml:"homeserver"`
 	AccessToken   string `yaml:"access_token"`
+	MediaSecret   string `yaml:"media_secret"`
 	RoomID        string `yaml:"room_id"`
 	ListenAddress string `yaml:"listen_address"`
 	ListenPort    int    `yaml:"listen_port"`
@@ -39,6 +40,9 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.AccessToken == "" {
 		return nil, fmt.Errorf("access_token is required")
+	}
+	if cfg.MediaSecret == "" {
+		return nil, fmt.Errorf("media_secret is required — add a random secret to config.yaml (e.g. openssl rand -hex 32)")
 	}
 	return cfg, nil
 }

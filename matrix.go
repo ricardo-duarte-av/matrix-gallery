@@ -43,6 +43,7 @@ type RoomInfo struct {
 
 type MatrixFetcher struct {
 	client      *mautrix.Client
+	mediaSecret string
 	memberCache sync.Map // map[string]memberInfo
 }
 
@@ -52,7 +53,8 @@ func newMatrixFetcher(cfg *Config) (*MatrixFetcher, error) {
 		return nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 	return &MatrixFetcher{
-		client: client,
+		client:      client,
+		mediaSecret: cfg.MediaSecret,
 	}, nil
 }
 
@@ -70,7 +72,7 @@ func (f *MatrixFetcher) getMember(ctx context.Context, roomID id.RoomID, userID 
 	if err == nil && content.AvatarURL != "" {
 		uri := content.AvatarURL.ParseOrIgnore()
 		if !uri.IsEmpty() {
-			info.AvatarURL = mxcToProxy(uri, "thumb")
+			info.AvatarURL = mxcToProxy(f.mediaSecret, uri, "thumb")
 		}
 	}
 
@@ -121,7 +123,7 @@ func (f *MatrixFetcher) FetchBatch(ctx context.Context, roomID id.RoomID, fromTo
 			log.Printf("DEBUG: Found media message msgtype=%q, url=%q, file=%v", msg.MsgType, msg.URL, msg.File != nil)
 		}
 
-		item, ok := extractMediaItem(evt, msg)
+		item, ok := extractMediaItem(f.mediaSecret, evt, msg)
 		if !ok {
 			log.Printf("DEBUG: extractMediaItem returned false for evt ID %s", evt.ID)
 			continue
@@ -175,7 +177,7 @@ func (f *MatrixFetcher) SyncOnce(ctx context.Context, since string, roomID id.Ro
 				continue
 			}
 			msg := evt.Content.AsMessage()
-			item, ok := extractMediaItem(evt, msg)
+			item, ok := extractMediaItem(f.mediaSecret, evt, msg)
 			if !ok {
 				continue
 			}
@@ -247,7 +249,7 @@ func (f *MatrixFetcher) GetJoinedRooms(ctx context.Context) ([]RoomInfo, error) 
 	return rooms, nil
 }
 
-func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaItem, bool) {
+func extractMediaItem(secret string, evt *event.Event, msg *event.MessageEventContent) (MediaItem, bool) {
 	var itemType string
 	switch msg.MsgType {
 	case event.MsgImage:
@@ -271,18 +273,18 @@ func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaIt
 		return MediaItem{}, false
 	}
 
-	originalURL := mxcToProxy(origURI, "original")
+	originalURL := mxcToProxy(secret, origURI, "original")
 
 	// Use the event's thumbnail_url if present; otherwise the proxy will
 	// generate a thumbnail from the original on first request.
-	thumbURL := mxcToProxy(origURI, "thumb")
+	thumbURL := mxcToProxy(secret, origURI, "thumb")
 	thumbServer := origURI.Homeserver
 	thumbMediaID := origURI.FileID
 
 	if msg.Info != nil && msg.Info.ThumbnailURL != "" {
 		thumbURI := msg.Info.ThumbnailURL.ParseOrIgnore()
 		if !thumbURI.IsEmpty() {
-			thumbURL = mxcToProxy(thumbURI, "thumb")
+			thumbURL = mxcToProxy(secret, thumbURI, "thumb")
 			thumbServer = thumbURI.Homeserver
 			thumbMediaID = thumbURI.FileID
 		}
@@ -312,6 +314,7 @@ func extractMediaItem(evt *event.Event, msg *event.MessageEventContent) (MediaIt
 	}, true
 }
 
-func mxcToProxy(uri id.ContentURI, kind string) string {
-	return fmt.Sprintf("/media/%s/%s/%s", kind, uri.Homeserver, uri.FileID)
+func mxcToProxy(secret string, uri id.ContentURI, kind string) string {
+	token := newMediaToken(secret, kind, uri.Homeserver, uri.FileID)
+	return "/media/" + token
 }

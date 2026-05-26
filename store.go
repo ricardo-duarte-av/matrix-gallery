@@ -194,7 +194,7 @@ func (s *Store) InjectEvents(ctx context.Context, events []*event.Event) {
 			continue
 		}
 		msg := evt.Content.AsMessage()
-		item, ok := extractMediaItem(evt, msg)
+		item, ok := extractMediaItem(s.fetcher.mediaSecret, evt, msg)
 		if !ok {
 			continue
 		}

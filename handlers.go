@@ -12,13 +12,14 @@ import (
 )
 
 type Handler struct {
-	manager    *StoreManager
-	proxy      *Proxy
-	lockedRoom id.RoomID
+	manager     *StoreManager
+	proxy       *Proxy
+	lockedRoom  id.RoomID
+	mediaSecret string
 }
 
-func newHandler(manager *StoreManager, proxy *Proxy, lockedRoom id.RoomID) *Handler {
-	return &Handler{manager: manager, proxy: proxy, lockedRoom: lockedRoom}
+func newHandler(manager *StoreManager, proxy *Proxy, lockedRoom id.RoomID, mediaSecret string) *Handler {
+	return &Handler{manager: manager, proxy: proxy, lockedRoom: lockedRoom, mediaSecret: mediaSecret}
 }
 
 func (h *Handler) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
@@ -88,33 +89,30 @@ func (h *Handler) handleAPIMedia(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleThumb(w http.ResponseWriter, r *http.Request) {
-	server, mediaID, ok := parseMXCPath(r.URL.Path, "/media/thumb/")
-	if !ok {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+// handleMedia decodes the HMAC-signed token from /media/<token> and serves
+// either a thumbnail or the original file depending on what was encoded.
+// Requests with a missing or forged token are rejected with 403.
+func (h *Handler) handleMedia(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.URL.Path, "/media/")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
 		return
 	}
-	h.proxy.ServeThumb(w, r, server, mediaID)
-}
 
-func (h *Handler) handleOriginal(w http.ResponseWriter, r *http.Request) {
-	server, mediaID, ok := parseMXCPath(r.URL.Path, "/media/original/")
-	if !ok {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+	kind, server, mediaID, err := decodeMediaToken(h.mediaSecret, token)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	h.proxy.ServeOriginal(w, r, server, mediaID)
-}
 
-// parseMXCPath extracts {server} and {mediaId} from a path like
-// "{prefix}{server}/{mediaId}".
-func parseMXCPath(urlPath, prefix string) (server, mediaID string, ok bool) {
-	rest := strings.TrimPrefix(urlPath, prefix)
-	idx := strings.Index(rest, "/")
-	if idx < 1 || idx == len(rest)-1 {
-		return "", "", false
+	switch kind {
+	case "thumb":
+		h.proxy.ServeThumb(w, r, server, mediaID)
+	case "original":
+		h.proxy.ServeOriginal(w, r, server, mediaID)
+	default:
+		http.Error(w, "forbidden", http.StatusForbidden)
 	}
-	return rest[:idx], rest[idx+1:], true
 }
 
 // noCacheHTML sets Cache-Control: no-store on responses for HTML pages so the

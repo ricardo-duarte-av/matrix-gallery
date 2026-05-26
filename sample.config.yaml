@@ -5,7 +5,11 @@
 homeserver: "https://matrix.example.com"
 
 # Access token from your Matrix client (Settings → Help & About → Access Token)
-access_token: "syt_your_access_token_here"
+access_token: "your_access_token_here"
+
+# Secret used to sign media proxy URLs — prevents open-proxy abuse.
+# Generate one with:  openssl rand -hex 32
+media_secret: "change_me_to_a_random_secret"
 
 # Optional: lock the gallery to a single room. When set, the room selector is
 # hidden in the UI and only this room's media can be served. Leave empty (or
