@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+cache
+config.yaml
+matrix-gallery
+test-server
+*.log
+Dockerfile
+.dockerignore
