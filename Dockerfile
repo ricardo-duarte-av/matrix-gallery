@@ -24,9 +24,14 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 COPY --from=build /out/matrix-gallery /usr/local/bin/matrix-gallery
 
+# Pre-create the cache directory so the default (non-root) user can write
+# thumbnails when no host directory is mounted over it.
+RUN mkdir -p /data/cache && chown -R gallery:gallery /data
+
 # The binary reads ./config.yaml and writes ./cache/thumbs, so /data is the
-# host-mounted directory: config.yaml in, thumbnail cache out.
-VOLUME /data
+# mount point: config.yaml in, thumbnail cache out. No VOLUME declaration —
+# docker-compose.yaml mounts the two paths explicitly, and an anonymous
+# volume over /data would shadow them.
 WORKDIR /data
 USER gallery
 

@@ -1,0 +1,22 @@
+services:
+  matrix-gallery:
+    image: ghcr.io/ricardo-duarte-av/matrix-gallery:latest
+    # Build locally instead of pulling by running: docker compose build
+    build:
+      context: .
+    container_name: matrix-gallery
+    # The image's built-in user is uid 10001; override it to whoever owns the
+    # host ./cache directory so thumbnails can be written there.
+    user: "1001:1001"
+    restart: unless-stopped
+    ports:
+      # Left side is the host port; the container always listens on 8008.
+      - "8008:8008"
+    volumes:
+      # The binary reads ./config.yaml from its working directory (/data).
+      - ./config.yaml:/data/config.yaml:ro
+      # Generated thumbnails, kept on the host so they survive container
+      # replacement. Must be writable by the uid in `user:` above.
+      - ./cache:/data/cache
+    environment:
+      - TZ=Europe/Lisbon
